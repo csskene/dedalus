@@ -11,7 +11,7 @@ from ..libraries import dedalus_sphere
 from . import basis
 from ..libraries.fftw import fftw_wrappers as fftw
 from ..tools import jacobi
-from ..tools.array import apply_matrix, apply_dense, axslice, splu_inverse, apply_sparse, prod, splu_inverse_adjoint
+from ..tools.array import apply_matrix, apply_dense, axslice, splu_inverse, apply_sparse, prod
 from ..tools.cache import CachedAttribute
 from ..tools.cache import CachedMethod
 
@@ -1069,9 +1069,7 @@ class FastChebyshevTransform(JacobiTransform):
                 self.forward_conversion.resize(self.M_orig, self.N)
                 self.forward_conversion = self.forward_conversion.tocsr()
             self.backward_conversion = jacobi.conversion_matrix(self.M_orig, a0, b0, a, b)
-            self.backward_conversion_adjoint = jacobi.conversion_matrix(self.M_orig, a0, b0, a, b)
             self.backward_conversion = splu_inverse(self.backward_conversion)
-            self.backward_conversion_adjoint = splu_inverse_adjoint(self.backward_conversion_adjoint)
             self.resize_rescale_forward = self._resize_rescale_forward_convert
             self.resize_rescale_backward = self._resize_rescale_backward_convert
             self.resize_rescale_forward_adjoint = self._resize_rescale_forward_convert_adjoint
@@ -1176,7 +1174,7 @@ class FastChebyshevTransform(JacobiTransform):
             data_out[posfreq_odd] *= -1
 
         # Ultraspherical conversion
-        apply_sparse(self.backward_conversion_adjoint, data_out, axis, out=data_out)
+        apply_sparse(self.backward_conversion.H, data_out, axis, out=data_out)
         badfreq = axslice(axis, Kmax_orig+1, None)
         if self.M_orig > self.N:
             # Truncate input before conversion
