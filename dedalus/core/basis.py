@@ -455,6 +455,9 @@ class IntervalBasis(Basis):
         # Subclasses must implement
         raise NotImplementedError
 
+    def adjoint_basis(self):
+        return self.clone_with(adjoint=True)
+
 
 class Jacobi(IntervalBasis, metaclass=CachedClass):
     """Jacobi polynomial basis."""
@@ -612,7 +615,6 @@ class Jacobi(IntervalBasis, metaclass=CachedClass):
         a = self.a + order
         b = self.b + order
         return self.clone_with(a=a, b=b)
-
 
 def Legendre(*args, **kw):
     return Jacobi(*args, a=0, b=0, **kw)
