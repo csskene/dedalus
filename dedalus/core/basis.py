@@ -343,7 +343,7 @@ class IntervalBasis(Basis):
     dim = 1
     subaxis_dependence = [True]
 
-    def __init__(self, coord, size, bounds, dealias):
+    def __init__(self, coord, size, bounds, dealias,adjoint):
         self.coord = coord
         coord.check_bounds(bounds)
         self.coordsystem = coord
@@ -355,6 +355,9 @@ class IntervalBasis(Basis):
             self.dealias = dealias
         else:
             self.dealias = (dealias,)
+
+        self.adjoint = adjoint
+
         self.COV = AffineCOV(self.native_bounds, bounds)
         super().__init__(coord)
 
@@ -433,14 +436,20 @@ class IntervalBasis(Basis):
         data_axis = len(field.tensorsig) + axis
         grid_size = gdata.shape[data_axis]
         plan = self.transform_plan(grid_size)
-        plan.forward(gdata, cdata, data_axis)
+        if(self.adjoint):
+            plan.backward_adjoint(gdata, cdata, data_axis)
+        else:
+            plan.forward(gdata, cdata, data_axis)
 
     def backward_transform(self, field, axis, cdata, gdata):
         """Backward transform field data."""
         data_axis = len(field.tensorsig) + axis
         grid_size = gdata.shape[data_axis]
         plan = self.transform_plan(grid_size)
-        plan.backward(cdata, gdata, data_axis)
+        if(self.adjoint):
+            plan.forward_adjoint(cdata, gdata, data_axis)
+        else:
+            plan.backward(cdata, gdata, data_axis)
 
     def transform_plan(self, grid_size):
         # Subclasses must implement
@@ -454,8 +463,8 @@ class Jacobi(IntervalBasis, metaclass=CachedClass):
     native_bounds = (-1, 1)
     transforms = {}
 
-    def __init__(self, coord, size, bounds, a, b, a0=None, b0=None, dealias=1, library=None):
-        super().__init__(coord, size, bounds, dealias)
+    def __init__(self, coord, size, bounds, a, b, a0=None, b0=None, dealias=1, library=None, adjoint=False):
+        super().__init__(coord, size, bounds, dealias, adjoint)
         # Default grid parameters
         if a0 is None:
             a0 = a
@@ -791,8 +800,8 @@ class FourierBase(IntervalBasis):
 
     native_bounds = (0, 2*np.pi)
 
-    def __init__(self, coord, size, bounds, dealias=1, library=None):
-        super().__init__(coord, size, bounds, dealias)
+    def __init__(self, coord, size, bounds, dealias=1, library=None, adjoint=False):
+        super().__init__(coord, size, bounds, dealias, adjoint)
         if library is None:
             library = "fftw"
         self.library = library
