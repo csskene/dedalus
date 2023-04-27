@@ -532,7 +532,7 @@ class Field(Current):
 
     """
 
-    def __init__(self, dist, bases=None, name=None, tensorsig=None, dtype=None):
+    def __init__(self, dist, bases=None, name=None, tensorsig=None, dtype=None, adjoint=False):
         if bases is None:
             bases = tuple()
         # Accept single basis in place of tuple/list
@@ -557,6 +557,9 @@ class Field(Current):
         self.layout = self.dist.get_layout_object('c')
         # Change scales to build buffer and data
         self.preset_scales((1,) * self.dist.dim)
+
+        # Whether to use adjoint transforms/operators or not
+        self.adjoint = adjoint
 
     def __getitem__(self, layout):
         """Return data viewed in specified layout."""
