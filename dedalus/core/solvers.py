@@ -504,7 +504,39 @@ class NonlinearBoundaryValueSolver(SolverBase):
             F_handler.add_task(eq['H'])
         F_handler.build_system()
         self.F = F_handler.fields
+
+        self.F_adj = []
+        self.state_adj = []
+        self.build_adjoint()
         logger.debug('Finished NLBVP instantiation')
+
+    def build_adjoint(self):
+        """
+        Build a field system for the adjoint system
+        self.F_adj has the same layout as self.F
+        self.state_adj has the same layout as self.state
+        """
+        if not self.F_adj:
+            for field in self.F:
+                field_adj = field.copy_adjoint()
+                # Zero the system
+                field_adj['c'] *= 0
+                if field.name:
+                    # If the direct field has a name, give the adjoint a 
+                    # corresponding name
+                    field_adj.name = '%s_adj' % field.name
+                self.F_adj.append(field_adj)
+
+        if not self.state_adj:
+            for field in self.state:
+                field_adj = field.copy_adjoint()
+                # Zero the system
+                field_adj['c'] *= 0
+                if field.name:
+                    # If the direct field has a name, give the adjoint a 
+                    # corresponding name
+                    field_adj.name = '%s_adj' % field.name
+                self.state_adj.append(field_adj)
 
     def newton_iteration(self, damping=1):
         """Update solution with a Newton iteration."""
@@ -535,6 +567,26 @@ class NonlinearBoundaryValueSolver(SolverBase):
             var['c'] += damping * pert['c']
         self.iteration += 1
 
+    def solve_adjoint(self):
+        # subsystems.build_subproblem_matrices(self, self.subproblems, ['dH'])
+        # Ensure coeff space before subsystem gathers/scatters
+        for field in self.F_adj:
+            field.preset_layout('c')
+        for field in self.state_adj:
+            field.change_layout('c')
+
+        # Solve system for each subproblem, updating perturbations
+        for sp in self.subproblems:
+            n_ss = len(sp.subsystems)
+            # Gather and adjoint-right-precondition RHS
+            X = np.zeros((sp.pre_right.shape[0], n_ss), dtype=self.dtype)
+            csr_matvecs(np.conj(sp.pre_right).T.tocsr(), sp.gather(self.state_adj), X)
+            # Solve
+            sp_matsolver = self.matsolver(np.conj(sp.dH_min @ sp.pre_right).T, self)
+            pX = - sp_matsolver.solve(X)
+            pF = np.zeros((sp.pre_left.shape[0], n_ss), dtype=self.dtype)
+            csr_matvecs(np.conj(sp.pre_left).T.tocsr(), pX.reshape((-1, n_ss)), pF)
+            sp.scatter(pF, self.F_adj)
 
 class InitialValueSolver(SolverBase):
     """
