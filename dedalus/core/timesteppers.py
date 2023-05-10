@@ -75,6 +75,8 @@ class MultistepIMEX:
         for j in range(self.cmax):
             F.append(CoeffSystem(solver.subproblems, dtype=solver.dtype))
 
+        # For the adjoint
+        self.timestep_history = []
         # Attributes
         self._iteration = 0
         self._LHS_params = None
@@ -103,6 +105,8 @@ class MultistepIMEX:
         # Cycle and compute timesteps
         self.dt.rotate()
         self.dt[0] = dt
+        # For the adjoint solve
+        self.timestep_history.append(dt)
 
         # Compute IMEX coefficients
         a, b, c = self.compute_coefficients(self.dt, self._iteration)
@@ -174,7 +178,7 @@ class MultistepIMEX:
         # Update solver
         solver.sim_time += dt
 
-    def step_adjoint(self, dt, wall_time):
+    def step_adjoint(self, wall_time):
         """Advance adjoint by one timestep."""
 
         # Solver references
@@ -194,21 +198,34 @@ class MultistepIMEX:
         RHS = self.RHS
         axpy = self.axpy
 
-        # Cycle and compute timesteps
-        self.dt.rotate()
-        self.dt[0] = dt
+        self._iteration -= 1
+        dt = self.timestep_history[self._iteration]
 
-        # Compute IMEX coefficients
+        # This part of the code could probably be tidier
+        # Compute IMEX coefficients at current iteration and up to steps-1 iterations in the future
         a = []
         b = []
         c = []
         for k in range(self.steps):
-            a_, b_, c_ = self.compute_coefficients(self.dt, self._iteration-1+k)
-            a.append(a_)
-            b.append(b_)
-            c.append(c_)
+            # If the future steps aren't beyond the last iteration
+            if(self._iteration+k < solver.stop_iteration):
+                # Compute the dt deque at iteration self._iteration+k
+                # Do not fill the deque with entries not present for initial start up iterations
+                # (put zero instead)
+                max_steps = np.min([self.steps,self._iteration+k+1])
+                for step in range(self.steps):
+                    if(step<max_steps):
+                        self.dt[step] = self.timestep_history[self._iteration+k-step]
+                    else:
+                        self.dt[step] = 0
 
-        self._iteration -= 1
+                # Compute a,b,c at iteration self._iteration+k
+                a_, b_, c_ = self.compute_coefficients(self.dt, self._iteration+k)
+                a.append(a_)
+                b.append(b_)
+                c.append(c_)
+
+        
         # Update RHS components and LHS matrices
 
         MX.rotate()
@@ -280,12 +297,12 @@ class MultistepIMEX:
             # for j in range(2, self.steps+1):
                 # RHS.data += c[j] * F[j-1].data
                 # axpy(a=c[j-2][j], x=F[j-1].data, y=RHS.data)
-            for j in range(1, len(a[-1])):
+            for j in range(1, len(a)+1):
                 # RHS.data -= a[j] * MX[j-1].data
                 axpy(a=-a[j-1][j], x=MX[j-1].data, y=RHS.data)
-            for j in range(1, len(b[-1])):
+            for j in range(1, len(b)+1):
                 # RHS.data -= b[j] * LX[j-1].data
-                axpy(a=-b[j-1][j], x=LX[j-1].data, y=RHS.data)    
+                axpy(a=-b[j-1][j], x=LX[j-1].data, y=RHS.data)
         
         if(solver.iteration==1):
             # Here, the next RHS is the adjoint state
@@ -664,6 +681,8 @@ class RungeKuttaIMEX:
         # For adjoint for now
         self.MXT = [CoeffSystem(solver.subproblems, dtype=solver.dtype) for i in range(self.stages)]
 
+        self.timestep_history = []
+
     def step(self, dt, wall_time):
         """Advance solver by one timestep."""
 
@@ -688,6 +707,9 @@ class RungeKuttaIMEX:
         c = self.c
         k = dt
         axpy = self.axpy
+
+        # Save dt for adjoint
+        self.timestep_history.append(dt)
 
         # Check on updating LHS
         update_LHS = (k != self._LHS_params)
@@ -758,7 +780,7 @@ class RungeKuttaIMEX:
                 sp.scatter_inputs(spX, state_fields)
             solver.sim_time = sim_time_0 + k*c[i]
 
-    def step_adjoint(self, dt, wall_time):
+    def step_adjoint(self, wall_time):
         """Advance solver by one timestep."""
 
         # Solver references
@@ -779,14 +801,13 @@ class RungeKuttaIMEX:
         A = self.A
         H = self.H
         c = self.c
-        k = dt
+        k = dt = self.timestep_history[solver.iteration-1]
         axpy = self.axpy
 
         MXT = self.MXT
 
         # Check on updating LHS
-        update_LHS = solver.iteration==solver.stop_iteration # for now
-
+        update_LHS = solver.iteration==solver.stop_iteration or (k != self._LHS_params)
         self._LHS_params = k
 
         for sp in subproblems:
