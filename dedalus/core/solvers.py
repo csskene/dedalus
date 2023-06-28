@@ -17,12 +17,16 @@ from . import timesteppers
 from .evaluator import Evaluator
 from ..libraries.matsolvers import matsolvers
 from ..tools.config import config
+<<<<<<< HEAD
 from ..tools.array import scipy_sparse_eigs
 from ..tools.parallel import ProfileWrapper, parallel_mkdir
 
 PROFILE_DEFAULT = config['profiling'].getboolean('PROFILE_DEFAULT')
 PARALLEL_PROFILE_DEFAULT = config['profiling'].getboolean('PARALLEL_PROFILE_DEFAULT')
 PROFILE_DIRECTORY = pathlib.Path(config['profiling'].get('PROFILE_DIRECTORY'))
+=======
+from ..tools.array import scipy_sparse_eigs, scipy_sparse_eigs_adj
+>>>>>>> f8d8bf8 (First attempt to accelerate adjoint eigenvectors by reusing LU transform of the direct solve)
 
 import logging
 logger = logging.getLogger(__name__.split('.')[-1])
@@ -272,7 +276,13 @@ class EigenvalueSolver(SolverBase):
             self.right_eigenvectors = self.eigenvectors = sp.pre_right @ pre_right_evecs
             self.left_eigenvectors = sp.pre_left.H @ pre_left_evecs
             self.modified_left_eigenvectors = (sp.M_min @ sp.pre_right_pinv).H @ pre_left_evecs
-            # Check that eigenvalues match
+            # # Check that eigenvalues match
+            # TODO: reimplement the reusing of the LU factorization for the left
+            # self.eigenvalues, pre_eigenvectors, self.left_eigenvalues, self.left_eigenvectors = scipy_sparse_eigs_adj(A=A,
+            #                                                                   B=B,
+            #                                                                   N=N, target=target,
+            #                                                                   matsolver=self.matsolver, **kw)
+            # self.eigenvectors = sp.pre_right @ pre_eigenvectors
             if not np.allclose(self.eigenvalues, np.conjugate(self.left_eigenvalues)):
                 if raise_on_mismatch:
                     raise RuntimeError("Conjugate of left eigenvalues does not match right eigenvalues. "
@@ -619,7 +629,7 @@ class NonlinearBoundaryValueSolver(SolverBase):
         for sp in self.subproblems:
             n_ss = len(sp.subsystems)
             # Gather (contains adjoint right-precondition)
-            X = sp.gather_inputs(self.state_adj) 
+            X = sp.gather_inputs(self.state_adj)
             # Solve
             sp_matsolver = self.matsolver(np.conj(sp.dF_min).T, self)
             pX = - sp_matsolver.solve(X)
