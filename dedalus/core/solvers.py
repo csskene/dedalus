@@ -11,7 +11,7 @@ from . import subsystems
 from .evaluator import Evaluator
 from ..libraries.matsolvers import matsolvers
 from ..tools.config import config
-from ..tools.array import csr_matvecs, scipy_sparse_eigs
+from ..tools.array import csr_matvecs, scipy_sparse_eigs, scipy_sparse_eigs_adj
 
 import logging
 logger = logging.getLogger(__name__.split('.')[-1])
@@ -253,16 +253,15 @@ class EigenvalueSolver(SolverBase):
         # Solve as sparse general eigenvalue problem
         A = (sp.L_min @ sp.pre_right)
         B = - (sp.M_min @ sp.pre_right)
-        # Solve for the right eigenvectors
-        self.eigenvalues, pre_eigenvectors = scipy_sparse_eigs(A=A, B=B, N=N, target=target, matsolver=self.matsolver, **kw)
-        self.eigenvectors = sp.pre_right @ pre_eigenvectors
+    
         if left:
-            # Solve for the left eigenvectors
+            # Solve for the left and right eigenvectors
             # Note: this definition of "left eigenvectors" is consistent with the documentation for scipy.linalg.eig
-            self.left_eigenvalues, self.left_eigenvectors = scipy_sparse_eigs(A=A.getH(),
-                                                                              B=B.getH(),
-                                                                              N=N, target=np.conjugate(target),
+            self.eigenvalues, pre_eigenvectors, self.left_eigenvalues, self.left_eigenvectors = scipy_sparse_eigs_adj(A=A,
+                                                                              B=B,
+                                                                              N=N, target=target,
                                                                               matsolver=self.matsolver, **kw)
+            self.eigenvectors = sp.pre_right @ pre_eigenvectors
             if not np.allclose(self.eigenvalues, np.conjugate(self.left_eigenvalues)):
                 if raise_on_mismatch:
                     raise RuntimeError("Conjugate of left eigenvalues does not match right eigenvalues. "
@@ -276,6 +275,10 @@ class EigenvalueSolver(SolverBase):
             if normalize_left:
                 self._normalize_left_eigenvectors()
             self.modified_left_eigenvectors = self._build_modified_left_eigenvectors()
+        else:
+            # Solve for the right eigenvectors
+            self.eigenvalues, pre_eigenvectors = scipy_sparse_eigs(A=A, B=B, N=N, target=target, matsolver=self.matsolver, **kw)
+            self.eigenvectors = sp.pre_right @ pre_eigenvectors
 
     def set_state(self, index, subsystem):
         """

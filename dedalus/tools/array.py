@@ -370,6 +370,45 @@ def scipy_sparse_eigs(A, B, N, target, matsolver, **kw):
     evals = 1 / evals + target
     return evals, evecs
 
+def scipy_sparse_eigs_adj(A, B, N, target, matsolver, **kw):
+    """
+    Perform targeted eigenmode search using the scipy/ARPACK sparse solver
+    for the reformulated generalized eigenvalue problem
+
+        A.x = λ B.x  ==>  (A - σB)^I B.x = (1/(λ-σ)) x
+
+    for eigenvalues λ near the target σ.
+
+    Parameters
+    ----------
+    A, B : scipy sparse matrices
+        Sparse matrices for generalized eigenvalue problem
+    N : int
+        Number of eigenmodes to return
+    target : complex
+        Target σ for eigenvalue search
+    matsolver : matrix solver class
+        Class implementing solve method for solving sparse systems.
+
+    Other keyword options passed to scipy.sparse.linalg.eigs.
+    """
+    # Build sparse linear operator representing (A - σB)^I B = C^I B = D
+    C = A - target * B
+    solver = matsolver(C)
+    def matvec(x):
+        return solver.solve(B.dot(x))
+    def rmatvec(x):
+        return B.H.dot(solver.solve_adjoint(x))
+    D = spla.LinearOperator(dtype=A.dtype, shape=A.shape, matvec=matvec, rmatvec=rmatvec)
+    # Solve using scipy sparse algorithm
+    evals, evecs = spla.eigs(D, k=N, which='LM', sigma=None, **kw)
+    evals_adjoint, evecs_adjoint = spla.eigs(D.H, k=N, which='LM', sigma=None, **kw)
+    print('M',evals,evals_adjoint)
+    # Rectify eigenvalues
+    evals = 1 / evals + target
+    evals_adjoint = 1 / evals_adjoint + np.conj(target)
+    return evals, evecs, evals_adjoint, evecs_adjoint
+
 
 def interleave_matrices(matrices):
     N = len(matrices)
