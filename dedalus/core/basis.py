@@ -4290,7 +4290,6 @@ class Spherical3DBasis(MultidimensionalBasis):
                 radius = self.radius
             else:
                 radius = max(self.radii)
-        print(self, radius)
         return SphereBasis(self.coordsystem, self.shape[:2], self.dtype, radius=radius, dealias=self.dealias[:2],
                     azimuth_library=self.azimuth_library, colatitude_library=self.colatitude_library)
 
@@ -6073,9 +6072,10 @@ class CartesianAdvectiveCFL(operators.AdvectiveCFL):
         spacing = []
         for i, c in enumerate(coordsys.coords):
             basis = velocity.domain.get_basis(c)
-            dealias = basis.dealias[0]
-            axis_spacing = basis.local_grid_spacing(i, dealias) * dealias
-            N = basis.grid_shape((dealias,))[0]
+            if basis:
+                dealias = basis.dealias[0]
+                axis_spacing = basis.local_grid_spacing(i, dealias) * dealias
+                N = basis.grid_shape((dealias,))[0]
             if isinstance(basis, Jacobi) and basis.a == -1/2 and basis.b == -1/2:
                 #Special case for ChebyshevT (a=b=-1/2)
                 local_elements = basis.dist.grid_layout.local_elements(basis.domain, scales=dealias)[i]
@@ -6086,6 +6086,8 @@ class CartesianAdvectiveCFL(operators.AdvectiveCFL):
                 #Special case for Fourier
                 native_spacing = 2 * np.pi / N
                 axis_spacing[:] = dealias * native_spacing * basis.COV.stretch
+            elif basis is None:
+                axis_spacing = np.inf
             spacing.append(axis_spacing)
         return spacing
 
