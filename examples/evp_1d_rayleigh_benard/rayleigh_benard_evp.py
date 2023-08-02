@@ -33,9 +33,10 @@ def max_growth_rate(Rayleigh, Prandtl, kx, Nz, NEV=10, target=0):
     """Compute maximum linear growth rate."""
 
     # Parameters
+    Lz = 1
+    # Build Fourier basis for x with prescribed kx as the fundamental mode
     Nx = 2
     Lx = 2 * np.pi / kx
-    Lz = 1
 
     # Bases
     coords = d3.CartesianCoordinates('x', 'z')

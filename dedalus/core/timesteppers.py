@@ -133,7 +133,7 @@ class MultistepIMEX:
                 sp.LHS_solver = None
 
         # Run evaluator
-        evaluator.evaluate_scheduled(wall_time=wall_time, timestep=dt, sim_time=sim_time, iteration=iteration)
+        evaluator.evaluate_scheduled(iteration=iteration, wall_time=wall_time, sim_time=sim_time, timestep=dt)
         F0.data.fill(0)
         for sp in subproblems:
             # F fields should be in coeff space from evaluator
@@ -165,7 +165,7 @@ class MultistepIMEX:
                     sp.LHS = (a0*sp.M_min + b0*sp.L_min) @ sp.pre_right  # CREATES TEMPORARY
                 sp.LHS_solver = solver.matsolver(sp.LHS, solver)
             # Slice out valid subdata, skipping invalid components
-            spRHS = RHS.get_subdata(sp)[:sp.LHS.shape[0]]
+            spRHS = RHS.get_subdata(sp)
             spX = sp.LHS_solver.solve(spRHS)  # CREATES TEMPORARY
             # Make output buffer including invalid components for scatter
             spX2 = np.zeros((sp.pre_right.shape[0], len(sp.subsystems)), dtype=spX.dtype)  # CREATES TEMPORARY
@@ -591,11 +591,11 @@ class RungeKuttaIMEX:
                 spX = sp.gather(state_fields)  # CREATES TEMPORARY
                 csr_matvecs(sp.L_min, spX, LXi.get_subdata(sp))  # Rectangular dot product skipping shape checks
 
-            # Compute F(n,i-1)
+            # Compute F(n,i-1), only doing output on first evaluation
             if i == 1:
-                evaluator.evaluate_scheduled(wall_time=wall_time, timestep=dt, sim_time=solver.sim_time, iteration=iteration)
+                evaluator.evaluate_scheduled(iteration=iteration, wall_time=wall_time, sim_time=solver.sim_time, timestep=dt)
             else:
-                evaluator.evaluate_group('F', wall_time=wall_time, timestep=dt, sim_time=solver.sim_time, iteration=iteration)
+                evaluator.evaluate_group('F')
             Fi = F[i-1]
             Fi.data.fill(0)
             for sp in subproblems:
@@ -625,7 +625,7 @@ class RungeKuttaIMEX:
                         sp.LHS = (sp.M_min + (k*H[i,i])*sp.L_min) @ sp.pre_right  # CREATES TEMPORARY
                     sp.LHS_solvers[i] = solver.matsolver(sp.LHS, solver)
                 # Slice out valid subdata, skipping invalid components
-                spRHS = RHS.get_subdata(sp)[:sp.LHS.shape[0]]
+                spRHS = RHS.get_subdata(sp)
                 spX = sp.LHS_solvers[i].solve(spRHS)  # CREATES TEMPORARY
                 # Make output buffer including invalid components for scatter
                 spX2 = np.zeros((sp.pre_right.shape[0], len(sp.subsystems)), dtype=spX.dtype)  # CREATES TEMPORARY

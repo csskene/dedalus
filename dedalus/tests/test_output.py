@@ -9,12 +9,20 @@ import pathlib
 from dedalus.tools.cache import CachedFunction
 
 
+# Check if parallel h5py is available
+handler_options = ['gather', 'virtual']
+if h5py.get_config().mpi:
+    handler_options.append('mpio')
+else:
+    handler_options.append(pytest.param('mpio', marks=pytest.mark.xfail(reason="parallel h5py not available")))
+
+
 @pytest.mark.parametrize('dtype', [np.float64, np.complex128])
 @pytest.mark.parametrize('dealias', [1, 3/2])
 @pytest.mark.parametrize('output_scales', [1, 3/2, 2,
     pytest.param(1/2, marks=pytest.mark.xfail(reason="evaluator not copying correctly for scales < 1"))])
 @pytest.mark.parametrize('output_layout', ['g', 'c'])
-@pytest.mark.parametrize('parallel', ['gather', 'mpio', 'virtual'])
+@pytest.mark.parametrize('parallel', handler_options)
 def test_cartesian_output(dtype, dealias, output_scales, output_layout, parallel):
     Nx = Ny = Nz = 16
     Lx = Ly = Lz = 2 * np.pi
@@ -44,7 +52,7 @@ def test_cartesian_output(dtype, dealias, output_scales, output_layout, parallel
         output = solver.evaluator.add_file_handler(tempdir, iter=1, parallel=parallel)
         for task in tasks:
             output.add_task(task, layout=output_layout, name=str(task), scales=output_scales)
-        solver.evaluator.evaluate_handlers([output], sim_time=0, wall_time=0, world_time=0, timestep=0, iteration=0)
+        solver.evaluate_handlers([output])
         # Check solution
         errors = []
         with h5py.File(f'{tempdir}/{tempdir}_s1.h5', mode='r') as file:
@@ -87,7 +95,7 @@ def build_shell(Nphi, Ntheta, Nr, k, dealias, dtype):
 @pytest.mark.parametrize('dtype', [np.float64, np.complex128])
 @pytest.mark.parametrize('output_scales', [1, 3/2, 2,
     pytest.param(1/2, marks=pytest.mark.xfail(reason="evaluator not copying correctly for scales < 1"))])
-@pytest.mark.parametrize('parallel', ['gather', 'virtual'])
+@pytest.mark.parametrize('parallel', handler_options)
 def test_spherical_output(Nphi, Ntheta, Nr, k, dealias, dtype, basis, output_scales, parallel):
     # Basis
     c, d, b, phi, theta, r, x, y, z = basis(Nphi, Ntheta, Nr, k, dealias, dtype)
@@ -108,7 +116,7 @@ def test_spherical_output(Nphi, Ntheta, Nr, k, dealias, dtype, basis, output_sca
         output = solver.evaluator.add_file_handler(tempdir, iter=1, parallel=parallel)
         for task in tasks:
             output.add_task(task, layout='g', name=str(task), scales=output_scales)
-        solver.evaluator.evaluate_handlers([output], sim_time=0, wall_time=0, world_time=0, timestep=0, iteration=0)
+        solver.evaluate_handlers([output])
         # Check solution
         errors = []
         with h5py.File(f'{tempdir}/{tempdir}_s1.h5', mode='r') as file:
