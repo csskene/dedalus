@@ -106,6 +106,17 @@ class SolverBase:
         self.subsystems = subsystems.build_subsystems(self)
         self.subproblems = subsystems.build_subproblems(self, self.subsystems)
         self.subproblems_by_group = {sp.group: sp for sp in self.subproblems}
+        # Build evaluator
+        namespace = {}
+        self.evaluator = Evaluator(self.dist, namespace)
+
+    def build_matrices(self, subproblems=None, matrices=None):
+        """Build matrices for selected subproblems."""
+        if subproblems is None:
+            subproblems = self.subproblems
+        if matrices is None:
+            matrices = self.matrices
+        subsystems.build_subproblem_matrices(self, subproblems, matrices)
 
 
 class EigenvalueSolver(SolverBase):
@@ -134,6 +145,7 @@ class EigenvalueSolver(SolverBase):
 
     # Default to factorizer to speed up repeated solves
     matsolver_default = 'MATRIX_FACTORIZER'
+    matrices = ['M', 'L']
 
     def __init__(self, problem, **kw):
         logger.debug('Beginning EVP instantiation')
@@ -160,7 +172,7 @@ class EigenvalueSolver(SolverBase):
     def _normalize_left_eigenvectors(self):
         modified_left_eigenvectors = self._build_modified_left_eigenvectors()
         norms = np.diag(modified_left_eigenvectors.T.conj() @ self.eigenvectors)
-        self.left_eigenvectors /= norms
+        self.left_eigenvectors /= np.conj(norms)
 
     def solve_dense(self, subproblem, rebuild_matrices=False, left=False, normalize_left=True, **kw):
         """
@@ -186,9 +198,9 @@ class EigenvalueSolver(SolverBase):
             Other keyword options passed to scipy.linalg.eig.
         """
         self.eigenvalue_subproblem = sp = subproblem
-        # Rebuild matrices if directed or not yet built
+        # Build matrices if directed or not yet built
         if rebuild_matrices or not hasattr(sp, 'L_min'):
-            subsystems.build_subproblem_matrices(self, [sp], ['M', 'L'])
+            self.build_matrices([sp], ['M', 'L'])
         # Solve as dense general eigenvalue problem
         A = (sp.L_min @ sp.pre_right).A
         B = - (sp.M_min @ sp.pre_right).A
@@ -235,9 +247,9 @@ class EigenvalueSolver(SolverBase):
             Other keyword options passed to scipy.sparse.linalg.eig.
         """
         self.eigenvalue_subproblem = sp = subproblem
-        # Rebuild matrices if directed or not yet built
+        # Build matrices if directed or not yet built
         if rebuild_matrices or not hasattr(sp, 'L_min'):
-            subsystems.build_subproblem_matrices(self, [sp], ['M', 'L'])
+            self.build_matrices([sp], ['M', 'L'])
         # Solve as sparse general eigenvalue problem
         A = (sp.L_min @ sp.pre_right)
         B = - (sp.M_min @ sp.pre_right)
@@ -310,15 +322,15 @@ class LinearBoundaryValueSolver(SolverBase):
 
     # Default to factorizer to speed up repeated solves
     matsolver_default = 'MATRIX_FACTORIZER'
+    matrices = ['L']
 
     def __init__(self, problem, **kw):
         logger.debug('Beginning LBVP instantiation')
         super().__init__(problem, **kw)
         self.subproblem_matsolvers = {}
         self.subproblem_matsolvers_adjoint = {}
+        self.iteration = 0
         # Create RHS handler
-        namespace = {}
-        self.evaluator = Evaluator(self.dist, namespace)
         F_handler = self.evaluator.add_system_handler(iter=1, group='F')
         for eq in problem.eqs:
             F_handler.add_task(eq['F'])
@@ -341,11 +353,6 @@ class LinearBoundaryValueSolver(SolverBase):
             L = (sp.L_min @ sp.pre_right).A
             print(f"MPI rank: {self.dist.comm.rank}, subproblem: {i}, group: {sp.group}, matrix rank: {np.linalg.matrix_rank(L)}/{L.shape[0]}, cond: {np.linalg.cond(L):.1e}")
 
-    def build_matrices(self, subproblems=None):
-        if subproblems is None:
-            subproblems = self.subproblems
-        subsystems.build_subproblem_matrices(self, subproblems, ['L'])
-
     def solve(self, subproblems=None, rebuild_matrices=False):
         """
         Solve BVP over selected subproblems.
@@ -362,18 +369,18 @@ class LinearBoundaryValueSolver(SolverBase):
             subproblems = self.subproblems
         if isinstance(subproblems, subsystems.Subproblem):
             subproblems = [subproblems]
-        # Rebuild matrices and matsolvers if directed or not yet built
+        # Build matrices and matsolvers if directed or not yet built
         if rebuild_matrices:
-            rebuild_subproblems = subproblems
+            sp_to_build = subproblems
         else:
-            rebuild_subproblems = [sp for sp in subproblems if sp not in self.subproblem_matsolvers]
-        if rebuild_subproblems:
-            self.build_matrices(rebuild_subproblems)
-            for sp in rebuild_subproblems:
+            sp_to_build = [sp for sp in subproblems if sp not in self.subproblem_matsolvers]
+        if sp_to_build:
+            self.build_matrices(sp_to_build, ['L'])
+            for sp in sp_to_build:
                 L = sp.L_min @ sp.pre_right
                 self.subproblem_matsolvers[sp] = self.matsolver(L, self)
         # Compute RHS
-        self.evaluator.evaluate_group('F', sim_time=0, wall_time=0, iteration=0)
+        self.evaluator.evaluate_scheduled(iteration=self.iteration)
         # Ensure coeff space before subsystem gathers/scatters
         for field in self.F:
             field.change_layout('c')
@@ -390,6 +397,13 @@ class LinearBoundaryValueSolver(SolverBase):
             X = np.zeros((sp.pre_right.shape[0], n_ss), dtype=self.dtype)  # CREATES TEMPORARY
             csr_matvecs(sp.pre_right, pX.reshape((-1, n_ss)), X)
             sp.scatter(X, self.state)
+        self.iteration += 1
+
+    def evaluate_handlers(self, handlers=None):
+        """Evaluate specified list of handlers (all by default)."""
+        if handlers is None:
+            handlers = self.evaluator.handlers
+        self.evaluator.evaluate_handlers(handlers, iteration=self.iteration)
 
     def build_adjoint(self):
         """
@@ -490,6 +504,7 @@ class NonlinearBoundaryValueSolver(SolverBase):
 
     # Default to solver since every iteration sees a new matrix
     matsolver_default = 'MATRIX_SOLVER'
+    matrices = ['dH']
 
     def __init__(self, problem, **kw):
         logger.debug('Beginning NLBVP instantiation')
@@ -497,8 +512,6 @@ class NonlinearBoundaryValueSolver(SolverBase):
         self.perturbations = problem.perturbations
         self.iteration = 0
         # Create RHS handler
-        namespace = {}
-        self.evaluator = Evaluator(self.dist, namespace)
         F_handler = self.evaluator.add_system_handler(iter=1, group='F')
         for eq in problem.eqs:
             F_handler.add_task(eq['H'])
@@ -509,10 +522,10 @@ class NonlinearBoundaryValueSolver(SolverBase):
     def newton_iteration(self, damping=1):
         """Update solution with a Newton iteration."""
         # Compute RHS
-        self.evaluator.evaluate_group('F', sim_time=0, wall_time=0, iteration=self.iteration)
+        self.evaluator.evaluate_scheduled(iteration=self.iteration)
         # Recompute Jacobian
         # TODO: split out linear part for faster recomputation?
-        subsystems.build_subproblem_matrices(self, self.subproblems, ['dH'])
+        self.build_matrices(self.subproblems, ['dH'])
         # Ensure coeff space before subsystem gathers/scatters
         for field in self.F:
             field.change_layout('c')
@@ -534,6 +547,12 @@ class NonlinearBoundaryValueSolver(SolverBase):
         for var, pert in zip(self.state, self.perturbations):
             var['c'] += damping * pert['c']
         self.iteration += 1
+
+    def evaluate_handlers(self, handlers=None):
+        """Evaluate specified list of handlers (all by default)."""
+        if handlers is None:
+            handlers = self.evaluator.handlers
+        self.evaluator.evaluate_handlers(handlers, iteration=self.iteration)
 
 
 class InitialValueSolver(SolverBase):
@@ -573,21 +592,23 @@ class InitialValueSolver(SolverBase):
 
     # Default to factorizer to speed up repeated solves
     matsolver_default = 'MATRIX_FACTORIZER'
+    matrices = ['M', 'L']
 
     def __init__(self, problem, timestepper, enforce_real_cadence=100, warmup_iterations=10, **kw):
         logger.debug('Beginning IVP instantiation')
         super().__init__(problem, **kw)
-        self.enforce_real_cadence = enforce_real_cadence
-        self._wall_time_array = np.zeros(1, dtype=float)
-        self.init_time = self.get_wall_time()
+        if np.isrealobj(self.dtype.type()):
+            self.enforce_real_cadence = enforce_real_cadence
+        else:
+            self.enforce_real_cadence = None
+        self._bcast_array = np.zeros(1, dtype=float)
+        self.init_time = self.world_time
         # Build LHS matrices
-        subsystems.build_subproblem_matrices(self, self.subproblems, ['M', 'L'])
+        self.build_matrices(self.subproblems, ['M', 'L'])
         # Compute total modes
         local_modes = sum(ss.subproblem.pre_right.shape[1] for ss in self.subsystems)
         self.total_modes = self.dist.comm.allreduce(local_modes, op=MPI.SUM)
         # Create RHS handler
-        namespace = {}
-        self.evaluator = Evaluator(self.dist, namespace)
         F_handler = self.evaluator.add_system_handler(iter=1, group='F')
         for eq in problem.eqs:
             F_handler.add_task(eq['F'])
@@ -617,11 +638,20 @@ class InitialValueSolver(SolverBase):
         self._sim_time = t
         self.problem.time['g'] = t
 
-    def get_wall_time(self):
-        self._wall_time_array[0] = time.time()
-        comm = self.dist.comm_cart
-        comm.Allreduce(MPI.IN_PLACE, self._wall_time_array, op=MPI.MAX)
-        return self._wall_time_array[0]
+    @property
+    def world_time(self):
+        if self.dist.comm.size == 1:
+            return time.time()
+        else:
+            # Broadcast time from root process
+            self._bcast_array[0] = time.time()
+            self.dist.comm_cart.Bcast(self._bcast_array, root=0)
+            return self._bcast_array[0]
+
+    @property
+    def wall_time(self):
+        """Seconds ellapsed since instantiation."""
+        return self.world_time - self.init_time
 
     @property
     def proceed(self):
@@ -629,7 +659,7 @@ class InitialValueSolver(SolverBase):
         if self.sim_time >= self.stop_sim_time:
             logger.info('Simulation stop time reached.')
             return False
-        elif (self.get_wall_time() - self.init_time) >= self.stop_wall_time:
+        elif self.wall_time >= self.stop_wall_time:
             logger.info('Wall stop time reached.')
             return False
         elif self.iteration >= self.stop_iteration:
@@ -654,8 +684,7 @@ class InitialValueSolver(SolverBase):
                     field_adj.name = '%s_adj' % field.name
                 self.state_adj.append(field_adj)
 
-
-    def load_state(self, path, index=-1):
+    def load_state(self, path, index=-1, allow_missing=False):
         """
         Load state from HDF5 file. Currently can only load grid space data.
 
@@ -665,6 +694,8 @@ class InitialValueSolver(SolverBase):
             Path to Dedalus HDF5 savefile
         index : int, optional
             Local write index (within file) to load (default: -1)
+        allow_missing : bool, optional
+            Do not raise an error if state variables are missing from the savefile (default: False).
 
         Returns
         -------
@@ -688,7 +719,12 @@ class InitialValueSolver(SolverBase):
             logger.info("Loading timestep: {}".format(dt))
             # Load fields
             for field in self.state:
-                field.load_from_hdf5(file, index)
+                if field.name in file['tasks']:
+                    field.load_from_hdf5(file, index)
+                elif allow_missing:
+                    logger.warning(f"Field '{field.name}' not found in savefile.")
+                else:
+                    raise IOError(f"Field '{field.name}' not found in savefile. Set allow_missing=True to ignore this error.")
         return write, dt
 
     def enforce_hermitian_symmetry(self, fields):
@@ -705,19 +741,18 @@ class InitialValueSolver(SolverBase):
         if not np.isfinite(dt):
             raise ValueError("Invalid timestep")
         # Enforce Hermitian symmetry for real variables
-        if np.isrealobj(self.dtype.type()):
+        if self.enforce_real_cadence:
             # Enforce for as many iterations as timestepper uses internally
             if self.iteration % self.enforce_real_cadence < self.timestepper.steps:
                 self.enforce_hermitian_symmetry(self.state)
         # Record times
-        wall_time = self.get_wall_time()
+        wall_time = self.wall_time
         if self.iteration == self.initial_iteration:
             self.start_time = wall_time
         if self.iteration == self.initial_iteration + self.warmup_iterations:
             self.warmup_time = wall_time
         # Advance using timestepper
-        wall_elapsed = wall_time - self.init_time
-        self.timestepper.step(dt, wall_elapsed)
+        self.timestepper.step(dt, wall_time)
         # Update iteration
         self.iteration += 1
         self.dt = dt
@@ -772,22 +807,21 @@ class InitialValueSolver(SolverBase):
             print(f"MPI rank: {self.dist.comm.rank}, subproblem: {i}, group: {sp.group}, matrix rank: {np.linalg.matrix_rank(A)}/{A.shape[0]}, cond: {np.linalg.cond(A):.1e}")
 
     def evaluate_handlers_now(self, dt, handlers=None):
-        """Evaluate all handlers right now. Useful for writing final outputs.
-        by default, all handlers are evaluated; if a list is given
-        only those will be evaluated.
-        """
-        end_wall_time = self.get_wall_time() - self.init_time
+        logger.warning("Deprecation warning: evaluate_handlers_now -> evaluate_handlers")
+        self.evaluate_handlers(handlers=handlers, dt=dt)
+
+    def evaluate_handlers(self, handlers=None, dt=0):
+        """Evaluate specified list of handlers (all by default)."""
         if handlers is None:
             handlers = self.evaluator.handlers
-        self.evaluator.evaluate_handlers(handlers, timestep=dt, sim_time=self.sim_time, wall_time=end_wall_time, iteration=self.iteration)
+        self.evaluator.evaluate_handlers(handlers, iteration=self.iteration, wall_time=self.wall_time, sim_time=self.sim_time, timestep=dt)
 
     def log_stats(self, format=".4g"):
         """Log timing statistics with specified string formatting (optional)."""
-        log_time = self.get_wall_time()
+        log_time = self.wall_time
         logger.info(f"Final iteration: {self.iteration}")
         logger.info(f"Final sim time: {self.sim_time}")
-        setup_time = self.start_time - self.init_time
-        logger.info(f"Setup time (init - iter 0): {setup_time:{format}} sec")
+        logger.info(f"Setup time (init - iter 0): {self.start_time:{format}} sec")
         if self.iteration >= self.initial_iteration + self.warmup_iterations:
             warmup_time = self.warmup_time - self.start_time
             run_time = log_time - self.warmup_time

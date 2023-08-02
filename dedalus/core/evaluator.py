@@ -85,28 +85,10 @@ class Evaluator:
         handlers = self.groups[group]
         self.evaluate_handlers(handlers, **kw)
 
-    def evaluate_scheduled(self, wall_time, sim_time, iteration, **kw):
+    def evaluate_scheduled(self, **kw):
         """Evaluate all scheduled handlers."""
-
-        scheduled_handlers = []
-        for handler in self.handlers:
-            # Get cadence devisors
-            wall_div = wall_time // handler.wall_dt
-            sim_div  = sim_time  // handler.sim_dt
-            iter_div = iteration // handler.iter
-            # Compare to divisor at last evaluation
-            wall_up = (wall_div > handler.last_wall_div)
-            sim_up  = (sim_div  > handler.last_sim_div)
-            iter_up = (iter_div > handler.last_iter_div)
-
-            if any((wall_up, sim_up, iter_up)):
-                scheduled_handlers.append(handler)
-                # Update all divisors
-                handler.last_wall_div = wall_div
-                handler.last_sim_div  = sim_div
-                handler.last_iter_div = iter_div
-
-        self.evaluate_handlers(scheduled_handlers, wall_time=wall_time, sim_time=sim_time, iteration=iteration, **kw)
+        handlers = [h for h in self.handlers if h.check_schedule(**kw)]
+        self.evaluate_handlers(handlers, **kw)
 
     def evaluate_handlers(self, handlers, id=None, **kw):
         """Evaluate a collection of handlers."""
@@ -216,10 +198,9 @@ class Evaluator:
         return unfinished
 
 
-
 class Handler:
     """
-    Group of tasks with associated scheduling data.
+    Group of tasks with associated evaluation schedule.
 
     Parameters
     ----------
@@ -228,17 +209,20 @@ class Handler:
     vars : dict
         Variables for parsing task expression strings
     group : str, optional
-        Group name for forcing selected handelrs (default: None)
+        Group name for forcing selected handlers (default: None).
     wall_dt : float, optional
-        Wall time cadence for evaluating tasks (default: infinite)
+        Wall time cadence for evaluating tasks (default: None).
     sim_dt : float, optional
-        Simulation time cadence for evaluating tasks (default: infinite)
+        Simulation time cadence for evaluating tasks (default: None).
     iter : int, optional
-        Iteration cadence for evaluating tasks (default: infinite)
-
+        Iteration cadence for evaluating tasks (default: None).
+    custom_schedule : function, optional
+        Custom scheduling function returning a boolean for triggering output (default: None).
+        Signature for IVPs: custom_schedule(iteration, wall_time, sim_time, timestep)
+        Signature for BVPs: custom_schedule(iteration)
     """
 
-    def __init__(self, dist, vars, group=None, wall_dt=np.inf, sim_dt=np.inf, iter=np.inf):
+    def __init__(self, dist, vars, group=None, wall_dt=None, sim_dt=None, iter=None, custom_schedule=None):
         # Attributes
         self.dist = dist
         self.vars = vars
@@ -246,11 +230,44 @@ class Handler:
         self.wall_dt = wall_dt
         self.sim_dt = sim_dt
         self.iter = iter
+        self.custom_schedule = custom_schedule
         self.tasks = []
-        # Set initial divisors to be scheduled for sim_time, iteration = 0
+        # Set initial divisors to be -1 to trigger output on first iteration
         self.last_wall_div = -1
         self.last_sim_div = -1
         self.last_iter_div = -1
+
+    def check_schedule(self, **kw):
+        scheduled = False
+        # Wall time
+        if self.wall_dt:
+            wall_div = kw['wall_time'] // self.wall_dt
+            if wall_div > self.last_wall_div:
+                scheduled = True
+                self.last_wall_div = wall_div
+        # Sim time
+        if self.sim_dt:
+            # Output if the output target closest to the current time hasn't triggered
+            # an output yet, and the next timestep will not bring you closer.
+            t = kw['sim_time']
+            dt = kw['timestep']
+            closest_sim_div = int(np.round(t / self.sim_dt))
+            if closest_sim_div > self.last_sim_div:
+                closest_sim_time = closest_sim_div * self.sim_dt
+                if abs(t - closest_sim_time) < abs(t + dt - closest_sim_time):
+                    scheduled = True
+                    self.last_sim_div = closest_sim_div
+        # Iteration
+        if self.iter:
+            iter_div = kw['iteration'] // self.iter
+            if iter_div > self.last_iter_div:
+                scheduled = True
+                self.last_iter_div = iter_div
+        # Custom call
+        if self.custom_schedule:
+            if self.custom_schedule(**kw):
+                scheduled = True
+        return scheduled
 
     def add_task(self, task, layout='g', name=None, scales=None):
         """Add task to handler."""
@@ -497,7 +514,7 @@ class H5FileHandlerBase(Handler):
         file.create_group('scales')
         file['scales'].create_dataset(name='constant', data=np.zeros(1), dtype=np.float64)
         file['scales']['constant'].make_scale('constant')
-        for name in ['sim_time', 'timestep', 'world_time', 'wall_time']:
+        for name in ['sim_time', 'timestep', 'wall_time']:
             file['scales'].create_dataset(name=name, shape=(0,), maxshape=(self.max_writes,), dtype=np.float64) # shape[0] = 0 to chunk across writes
             file['scales'][name].make_scale(name)
         for name in ['iteration', 'write_number']:
@@ -516,7 +533,7 @@ class H5FileHandlerBase(Handler):
             dset.attrs['scales'] = scales
             # Time scales
             dset.dims[0].label = 't'
-            for sn in ['sim_time', 'world_time', 'wall_time', 'timestep', 'iteration', 'write_number']:
+            for sn in ['sim_time', 'wall_time', 'timestep', 'iteration', 'write_number']:
                 dset.dims[0].attach_scale(file['scales'][sn])
             # Spatial scales
             rank = len(op.tensorsig)
@@ -549,10 +566,8 @@ class H5FileHandlerBase(Handler):
         dset = file['tasks'].create_dataset(name=task['name'], shape=shape, maxshape=maxshape, dtype=task['dtype'])
         return dset
 
-    def process(self, **kw):
+    def process(self, iteration, wall_time=0, sim_time=0, timestep=0):
         """Save task outputs to HDF5 file."""
-        # HACK: fix world time and timestep inputs from solvers.py/timestepper.py
-        kw['world_time'] = 0
         # Update write counts
         self.total_write_num += 1
         self.file_write_num += 1
@@ -563,7 +578,7 @@ class H5FileHandlerBase(Handler):
                 self.file_write_num = 1
         # Write file metadata
         file = self.get_file()
-        self.write_file_metadata(file, write_number=self.total_write_num, **kw)
+        self.write_file_metadata(file, write_number=self.total_write_num, iteration=iteration, wall_time=wall_time, sim_time=sim_time, timestep=timestep)
         # Write tasks
         for task in self.tasks:
             # Transform and process data
@@ -579,7 +594,7 @@ class H5FileHandlerBase(Handler):
         # Update file metadata
         file.attrs['writes'] = self.file_write_num
         # Update time scales
-        for name in ['sim_time', 'world_time', 'wall_time', 'timestep', 'iteration', 'write_number']:
+        for name in ['sim_time', 'wall_time', 'timestep', 'iteration', 'write_number']:
             dset = file['scales'][name]
             dset.resize(self.file_write_num, axis=0)
             dset[self.file_write_num-1] = kw[name]
@@ -635,6 +650,9 @@ class H5ParallelFileHandler(H5FileHandlerBase):
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
+        # Fail if not using MPI
+        if not h5py.get_config().mpi:
+            raise ValueError("H5ParallelFileHandler requires parallel build of h5py.")
         # Set HDF5 property list for collective writing
         self._property_list = h5py.h5p.create(h5py.h5p.DATASET_XFER)
         self._property_list.set_dxpl_mpio(h5py.h5fd.MPIO_COLLECTIVE)

@@ -6,7 +6,7 @@ Abstract and built-in classes defining deferred operations on fields.
 from collections import defaultdict
 from functools import partial, reduce
 import numpy as np
-from numpy.testing._private.utils import raises
+import scipy.special as scp
 from scipy import sparse
 from numbers import Number
 from inspect import isclass
@@ -394,6 +394,10 @@ class PowerFieldConstant(Power, FutureField):
         arg1 = self.args[1]
         return self.new_operands(arg0, arg1, **kw)
 
+    def require_first_order(self, *ops, **kw):
+        """Require expression to be maximally first order in specified operators."""
+        arg0 = self.args[0]
+        arg0.require_first_order(*ops, **kw)
 
 # class PowerArrayScalar(PowerDataScalar, FutureArray):
 
@@ -427,14 +431,21 @@ class PowerFieldConstant(Power, FutureField):
 
 class GeneralFunction(NonlinearOperator, FutureField):
     """
-    Operator wrapping a general python function.
+    Operator wrapping a general python function to return a field.
 
     Parameters
     ----------
+    dist : distributor object
+        Distributor
     domain : domain object
         Domain
+    tensorsig : tuple of coordinate systems
+        Tensor signature of output field (corresponding to, e.g., scalar,
+        vector, rank-2 tensor, etc.)
+    dtype : dtype
+        Data type of output field
     layout : layout object or identifier
-        Layout of function output
+        Layout of output field
     func : function
         Function producing field data
     args : list
@@ -454,27 +465,27 @@ class GeneralFunction(NonlinearOperator, FutureField):
 
     """
 
-    def __init__(self, domain, layout, func, args=[], kw={}, out=None,):
+    def __init__(self, dist, domain, tensorsig, dtype, layout, func, args=[], kw={}, out=None,):
 
         # Required attributes
         self.args = list(args)
         self.original_args = list(args)
-        self.domain = domain
         self.out = out
         self.last_id = None
         # Additional attributes
-        self.layout = domain.distributor.get_layout_object(layout)
+        self.dist = dist
+        self.layout = self.dist.get_layout_object(layout)
         self.func = func
         self.kw = kw
-        self._field_arg_indices = [i for (i,arg) in enumerate(self.args) if is_fieldlike(arg)]
+        self._field_arg_indices = [i for (i,arg) in enumerate(self.args) if isinstance(arg, (Field, FutureField, FutureLockedField))]
         try:
             self.name = func.__name__
         except AttributeError:
             self.name = str(func)
-        self.build_metadata()
-
-    def build_metadata(self):
-        self.constant = np.array([False] * self.domain.dim)
+        # FutureField requirements
+        self.domain = domain
+        self.tensorsig = tensorsig
+        self.dtype = dtype
 
     def check_conditions(self):
         # Fields must be in proper layout
@@ -483,10 +494,12 @@ class GeneralFunction(NonlinearOperator, FutureField):
                 return False
         return True
 
-    def operate(self, out):
-        # Apply func in proper layout
+    def enforce_conditions(self):
         for i in self._field_arg_indices:
-            self.args[i].change_layout(self.layout)
+            if self.args[i].layout is not self.layout:
+                self.args[i].change_layout(self.layout)
+
+    def operate(self, out):
         out.preset_layout(self.layout)
         np.copyto(out.data, self.func(*self.args, **self.kw))
 
@@ -498,6 +511,7 @@ class UnaryGridFunction(NonlinearOperator, FutureField):
          np.log, np.log2, np.log10, np.log1p, np.sqrt, np.square,
          np.sin, np.cos, np.tan, np.arcsin, np.arccos, np.arctan,
          np.sinh, np.cosh, np.tanh, np.arcsinh, np.arccosh, np.arctanh,
+         scp.erf
          )}
     aliased = {'abs':np.absolute, 'conj':np.conjugate}
     # Add ufuncs and shortcuts to parseables
@@ -553,10 +567,11 @@ class UnaryGridFunction(NonlinearOperator, FutureField):
                     np.arctan: lambda x: (1 + x**2)**(-1),
                     np.sinh: lambda x: np.cosh(x),
                     np.cosh: lambda x: np.sinh(x),
-                    np.tanh: lambda x: np.cosh(x)**(-2),
+                    np.tanh: lambda x: 1-np.tanh(x)**2,
                     np.arcsinh: lambda x: (x**2 + 1)**(-1/2),
                     np.arccosh: lambda x: (x**2 - 1)**(-1/2),
-                    np.arctanh: lambda x: (1 - x**2)**(-1)}
+                    np.arctanh: lambda x: (1 - x**2)**(-1),
+                    scp.erf: lambda x: 2*(np.pi)**(-1/2)*np.exp(-x**2)}
         arg = self.args[0]
         arg_diff = arg.sym_diff(var)
         return diff_map[self.func](arg) * arg_diff
@@ -1254,16 +1269,16 @@ class Average(LinearOperator, metaclass=MultiClass):
         self.dtype = operand.dtype
 
 
-# CHECK NEW
-@parseable('filter', 'f')
-def filter(arg, **modes):
-    # Identify domain
-    domain = unify_attributes((arg,)+tuple(modes), 'domain', require=False)
-    # Apply iteratively
-    for space, mode in modes.items():
-        space = domain.get_space_object(space)
-        arg = Filter(arg, space, mode)
-    return arg
+# # CHECK NEW
+# @parseable('filter', 'f')
+# def filter(arg, **modes):
+#     # Identify domain
+#     domain = unify_attributes((arg,)+tuple(modes), 'domain', require=False)
+#     # Apply iteratively
+#     for space, mode in modes.items():
+#         space = domain.get_space_object(space)
+#         arg = Filter(arg, space, mode)
+#     return arg
 
 
 # class Filter(LinearSubspaceFunctional):
@@ -1296,19 +1311,19 @@ def filter(arg, **modes):
 #             return 0
 
 
-@prefix('d')
-@parseable('differentiate', 'diff', 'd')
-def differentiate(arg, *spaces, **space_kw):
-    # Parse space/order keywords into space list
-    for space, order in space_kw.items():
-        spaces += (space,) * order
-    # Identify domain
-    domain = unify_attributes((arg,)+spaces, 'domain', require=False)
-    # Apply iteratively
-    for space in spaces:
-        space = domain.get_space_object(space)
-        arg = Differentiate(arg, space)
-    return arg
+# @prefix('d')
+# @parseable('differentiate', 'diff', 'd')
+# def differentiate(arg, *spaces, **space_kw):
+#     # Parse space/order keywords into space list
+#     for space, order in space_kw.items():
+#         spaces += (space,) * order
+#     # Identify domain
+#     domain = unify_attributes((arg,)+spaces, 'domain', require=False)
+#     # Apply iteratively
+#     for space in spaces:
+#         space = domain.get_space_object(space)
+#         arg = Differentiate(arg, space)
+#     return arg
 
 
 class Differentiate(SpectralOperator1D, metaclass=MultiClass):
@@ -1385,19 +1400,19 @@ class DifferentiateConstant(Differentiate):
         return 0
 
 
-@prefix('H')
-@parseable('hilbert_transform', 'hilbert', 'H')
-def hilbert_transform(arg, *spaces, **space_kw):
-    # Parse space/order keywords into space list
-    for space, order in space_kw.items():
-        spaces += (space,) * order
-    # Identify domain
-    domain = unify_attributes((arg,)+spaces, 'domain', require=False)
-    # Apply iteratively
-    for space in spaces:
-        space = domain.get_space_object(space)
-        arg = HilbertTransform(arg, space)
-    return arg
+# @prefix('H')
+# @parseable('hilbert_transform', 'hilbert', 'H')
+# def hilbert_transform(arg, *spaces, **space_kw):
+#     # Parse space/order keywords into space list
+#     for space, order in space_kw.items():
+#         spaces += (space,) * order
+#     # Identify domain
+#     domain = unify_attributes((arg,)+spaces, 'domain', require=False)
+#     # Apply iteratively
+#     for space in spaces:
+#         space = domain.get_space_object(space)
+#         arg = HilbertTransform(arg, space)
+#     return arg
 
 
 class HilbertTransform(SpectralOperator1D, metaclass=MultiClass):
@@ -2243,11 +2258,14 @@ class AngularComponent(Component, metaclass=MultiClass):
 
     def __init__(self, operand, index=0, out=None):
         super().__init__(operand, index=index, out=out)
-        if not isinstance(self.coordsys, coords.SphericalCoordinates):
-            raise ValueError("Can only take the AngularComponent of a SphericalCoordinate vector")
         tensorsig = operand.tensorsig
-        S2coordsys = tensorsig[index].S2coordsys
-        self.tensorsig = tuple( tensorsig[:index] + (S2coordsys,) + tensorsig[index+1:] )
+        if isinstance(self.coordsys, coords.PolarCoordinates):
+            self.tensorsig = tuple( tensorsig[:index] + tensorsig[index+1:] )
+        elif isinstance(self.coordsys, coords.SphericalCoordinates):
+            S2coordsys = tensorsig[index].S2coordsys
+            self.tensorsig = tuple( tensorsig[:index] + (S2coordsys,) + tensorsig[index+1:] )
+        else:
+            raise ValueError("Not supported")
 
     def new_operand(self, operand, **kw):
         return AngularComponent(operand, self.index, **kw)
@@ -2313,6 +2331,10 @@ class CartesianGradient(Gradient):
 
     def __init__(self, operand, coordsys, out=None):
         args = [Differentiate(operand, coord) for coord in coordsys.coords]
+        for i in range(len(args)):
+            if args[i] == 0:
+                args[i] = 2*operand
+                args[i].args[0] = 0
         bases = self._build_bases(*args)
         args = [convert(arg, bases) for arg in args]
         LinearOperator.__init__(self, *args, out=out)
