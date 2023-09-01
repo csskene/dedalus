@@ -70,6 +70,8 @@ class MultistepIMEX:
         for j in range(self.cmax):
             F.append(CoeffSystem(solver.subproblems, dtype=solver.dtype))
 
+        # For the adjoint
+        self.timestep_history = []
         # Attributes
         self._iteration = 0
         self._LHS_params = None
@@ -98,6 +100,8 @@ class MultistepIMEX:
         # Cycle and compute timesteps
         self.dt.rotate()
         self.dt[0] = dt
+        # For the adjoint solve
+        self.timestep_history.append(dt)
 
         # Compute IMEX coefficients
         a, b, c = self.compute_coefficients(self.dt, self._iteration)
@@ -174,6 +178,146 @@ class MultistepIMEX:
 
         # Update solver
         solver.sim_time += dt
+
+    def step_adjoint(self, wall_time):
+        """Advance adjoint by one timestep."""
+
+        # Solver references
+        solver = self.solver
+        subproblems = solver.subproblems
+        evaluator = solver.evaluator
+        state_fields = solver.state_adj
+        F_fields = solver.F
+        sim_time = solver.sim_time
+        iteration = solver.iteration
+        STORE_EXPANDED_MATRICES = solver.store_expanded_matrices
+
+        # Other references
+        MX = self.MX
+        LX = self.LX
+        F = self.F
+        RHS = self.RHS
+        axpy = self.axpy
+
+        self._iteration -= 1
+        dt = self.timestep_history[self._iteration]
+
+        # This part of the code could probably be tidier
+        # Compute IMEX coefficients at current iteration and up to steps-1 iterations in the future
+        a = []
+        b = []
+        c = []
+        for k in range(self.steps):
+            # If the future steps aren't beyond the last iteration
+            if(self._iteration+k < solver.stop_iteration):
+                # Compute the dt deque at iteration self._iteration+k
+                # Do not fill the deque with entries not present for initial start up iterations
+                # (put zero instead)
+                max_steps = np.min([self.steps,self._iteration+k+1])
+                for step in range(self.steps):
+                    if(step<max_steps):
+                        self.dt[step] = self.timestep_history[self._iteration+k-step]
+                    else:
+                        self.dt[step] = 0
+
+                # Compute a,b,c at iteration self._iteration+k
+                a_, b_, c_ = self.compute_coefficients(self.dt, self._iteration+k)
+                a.append(a_)
+                b.append(b_)
+                c.append(c_)
+
+        
+        # Update RHS components and LHS matrices
+
+        MX.rotate()
+        LX.rotate()
+        F.rotate()
+
+        MX0 = MX[0]
+        LX0 = LX[0]
+        F0 = F[0]
+        a0 = a[0][0]
+        b0 = b[0][0]
+
+        # Check on updating LHS
+        if(solver.iteration==solver.stop_iteration):
+            # Must clear the deque
+            for m in MX:
+                m.data.fill(0)
+            for l in LX:
+                l.data.fill(0)
+            for f in F:
+                f.data.fill(0)
+
+        update_LHS = ((a0, b0) != self._LHS_params) or solver.iteration==solver.stop_iteration
+        self._LHS_params = (a0, b0)
+
+        MX0.data.fill(0)
+        LX0.data.fill(0)
+        F0.data.fill(0)
+
+        # Solve, form L, M, F terms, then form next RHS
+        # Ensure coeff space before subsystem gathers
+      
+        for sp in subproblems:
+            if update_LHS:
+                # Remove old solver reference
+                sp.LHS_solver = None
+            if update_LHS:
+                if STORE_EXPANDED_MATRICES:
+                    np.copyto(sp.LHS.data, a0*sp.M_exp.data + b0*sp.L_exp.data)  # CREATES TEMPORARY
+                else:
+                    sp.LHS = (a0*sp.M_min + b0*sp.L_min) @ sp.pre_right  # CREATES TEMPORARY
+                sp.LHS_solver = solver.matsolver(np.conj(sp.LHS).T.tocsr(), solver)
+
+        # Ensure coeff space before subsystem gathers
+        for field in state_fields:
+            field.require_coeff_space()
+     
+        for sp in subproblems:
+            # Slice out valid subdata, skipping invalid components
+            if(solver.iteration==solver.stop_iteration):
+                # Use adjoint state for RHS
+                spX2 = sp.gather(state_fields)
+                spRHS = np.zeros((sp.pre_right.shape[1], len(sp.subsystems)), dtype=spX2.dtype)  # CREATES TEMPORARY
+                csr_matvecs(np.conj(sp.pre_right).T.tocsr(), spX2, spRHS)
+            else:
+                # Use computed adjoint RHS
+                spRHS = RHS.get_subdata(sp)
+
+            for field in state_fields:
+                field.preset_layout('c')
+
+            
+            spX = sp.LHS_solver.solve(spRHS)  # CREATES TEMPORARY
+            # sp.scatter(spX, state_fields)
+            csr_matvecs(np.conj(sp.pre_right).T.tocsr()@np.conj(sp.M_min).T.tocsr(), spX, MX0.get_subdata(sp))  # Rectangular dot product skipping shape checks
+            csr_matvecs(np.conj(sp.pre_right).T.tocsr()@np.conj(sp.L_min).T.tocsr(), spX, LX0.get_subdata(sp))  # Rectangular dot product skipping shape checks 
+
+        if RHS.data.size:
+            np.multiply(c[0][1], F0.data, out=RHS.data)
+            # for j in range(2, self.steps+1):
+                # RHS.data += c[j] * F[j-1].data
+                # axpy(a=c[j-2][j], x=F[j-1].data, y=RHS.data)
+            for j in range(1, len(a)+1):
+                # RHS.data -= a[j] * MX[j-1].data
+                axpy(a=-a[j-1][j], x=MX[j-1].data, y=RHS.data)
+            for j in range(1, len(b)+1):
+                # RHS.data -= b[j] * LX[j-1].data
+                axpy(a=-b[j-1][j], x=LX[j-1].data, y=RHS.data)
+        
+        if(solver.iteration==1):
+            # Here, the next un-preconditioned RHS is the adjoint state
+            for field in state_fields:
+                field.preset_layout('c')
+            for sp in subproblems:
+                spRHS = RHS.get_subdata(sp)
+                spRHS2 = np.zeros((sp.pre_right.shape[0], len(sp.subsystems)), dtype=spRHS.dtype)  # CREATES TEMPORARY
+                csr_matvecs(sp.pre_right, spRHS, spRHS2)
+                sp.scatter(spRHS2, state_fields)
+
+        # Update solver
+        solver.sim_time -= dt
 
 
 @add_scheme
@@ -538,6 +682,11 @@ class RungeKuttaIMEX:
         self._LHS_params = None
         self.axpy = blas.get_blas_funcs('axpy', dtype=solver.dtype)
 
+        # For adjoint for now
+        self.MXT = [CoeffSystem(solver.subproblems, dtype=solver.dtype) for i in range(self.stages)]
+
+        self.timestep_history = []
+
     def step(self, dt, wall_time):
         """Advance solver by one timestep."""
 
@@ -561,6 +710,9 @@ class RungeKuttaIMEX:
         c = self.c
         k = dt
         axpy = self.axpy
+
+        # Save dt for adjoint
+        self.timestep_history.append(dt)
 
         # Check on updating LHS
         update_LHS = (k != self._LHS_params)
@@ -633,6 +785,123 @@ class RungeKuttaIMEX:
                 sp.scatter(spX2, state_fields)
             solver.sim_time = sim_time_0 + k*c[i]
 
+    def step_adjoint(self, wall_time):
+        """Advance solver by one timestep."""
+
+        # Solver references
+        solver = self.solver
+        subproblems = solver.subproblems
+        evaluator = solver.evaluator
+        state_fields = solver.state_adj
+        F_fields = solver.F
+        sim_time_0 = solver.sim_time
+        iteration = solver.iteration
+        STORE_EXPANDED_MATRICES = solver.store_expanded_matrices
+
+        # Other references
+        RHS = self.RHS
+        MX0 = self.MX0
+        LX = self.LX
+        F = self.F
+        A = self.A
+        H = self.H
+        c = self.c
+        k = dt = self.timestep_history[solver.iteration-1]
+        axpy = self.axpy
+
+        MXT = self.MXT
+
+        # Check on updating LHS
+        update_LHS = solver.iteration==solver.stop_iteration or (k != self._LHS_params)
+        self._LHS_params = k
+
+        for sp in subproblems:
+            if update_LHS:
+                # Remove old solver references
+                sp.LHS_solvers = [None] * (self.stages+1)
+
+        # Final time condition
+        # Ensure coeff space before subsystem gathers
+        for field in state_fields:
+            field.require_coeff_space()
+
+        RHS.data.fill(0)
+        for sp in subproblems:
+            # Use adjoint state for RHS
+            spX2 = sp.gather(state_fields)
+            csr_matvecs(np.conj(sp.pre_right).T.tocsr(), spX2, RHS.get_subdata(sp))
+        
+        # Compute stages
+        for i in reversed(range(1, self.stages+1)):
+            # Solve for stage
+    
+            # Clear coeff system for transposed data
+            LXi = LX[i-1]
+            LXi.data.fill(0)
+
+            Fi = F[i-1]
+            Fi.data.fill(0)
+
+            MXTi = MXT[i-1]
+            MXTi.data.fill(0)
+
+            # WARNING: Not adjointed yet (assumed F is zero)
+            # Compute F(n,i-1) (needs to be adjointed here...)
+            # if i == 1:
+            #     evaluator.evaluate_scheduled(wall_time=wall_time, timestep=dt, sim_time=solver.sim_time, iteration=iteration)
+            # else:
+            #     evaluator.evaluate_group('F', wall_time=wall_time, timestep=dt, sim_time=solver.sim_time, iteration=iteration)
+
+            for sp in subproblems:
+                # Construct LHS(n,i)
+                if update_LHS: # just for now
+                    if STORE_EXPANDED_MATRICES:
+                        np.copyto(sp.LHS.data, sp.M_exp.data + (k*H[i,i])*sp.L_exp.data)  # CREATES TEMPORARY
+                    else:
+                        sp.LHS = (sp.M_min + (k*H[i,i])*sp.L_min) @ sp.pre_right  # CREATES TEMPORARY
+                    # Create transposed solver
+                    sp.LHS_solvers[i] = solver.matsolver(np.conj(sp.LHS).T, solver)
+
+                # Use computed adjoint RHS
+                spRHS = RHS.get_subdata(sp)
+
+                spX = sp.LHS_solvers[i].solve(spRHS)  # CREATES TEMPORARY
+
+                # Compute new transpose terms and RHS
+                csr_matvecs((np.conj(sp.pre_right).T@np.conj(sp.L_min).T).tocsr(), spX, LXi.get_subdata(sp))  # Rectangular dot product skipping shape checks                
+                csr_matvecs((np.conj(sp.pre_right).T@np.conj(sp.M_min).T).tocsr(), spX, MXTi.get_subdata(sp))
+
+                # RHS similar but not implemented yet
+                # spX = sp.gather(F_fields) 
+                # csr_matvecs(np.conj(sp.pre_right).T.tocsr()np.conj(sp.pre_left).T.tocsr(), spX, Fi.get_subdata(sp))  # Rectangular dot product skipping shape checks             
+                # Compute adjoint RHS
+
+                if RHS.data.size:
+                    RHS.data.fill(0)
+                    for j in range(i, self.stages+1):
+                        # RHS.data += (k * A[j,i]) * FT[j-1].data
+                        axpy(a=(k*A[j,i-1]), x=F[j-1].data, y=RHS.data)
+                        # RHS.data -= (k * H[j,i]) * LXT[j].data
+                        axpy(a=-(k*H[j,i-1]), x=LX[j-1].data, y=RHS.data)
+               
+            solver.sim_time = sim_time_0 - k + k*c[i-1]
+
+        # At last stage add on MXT terms
+        if RHS.data.size:
+            for j in range(1, self.stages+1):
+                # RHS.data += (1 * H[j,0]) * MXT[j].data
+                axpy(a=1, x=MXT[j-1].data, y=RHS.data)
+
+        # Ensure coeff space before subsystem scatters
+        for field in state_fields:
+            field.preset_layout('c')
+
+        for sp in subproblems:
+            # Adjoint state is the RHS (Use pre-right to undo pre-conditioned RHS)        
+            spRHS = RHS.get_subdata(sp)
+            spRHS2 = np.zeros((sp.pre_right.shape[0], len(sp.subsystems)), dtype=spRHS.dtype)  # CREATES TEMPORARY
+            csr_matvecs(sp.pre_right, spRHS, spRHS2)
+            sp.scatter(spRHS2, state_fields)
 
 @add_scheme
 class RK111(RungeKuttaIMEX):
