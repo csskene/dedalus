@@ -355,6 +355,7 @@ class IntervalBasis(Basis):
             self.dealias = dealias
         else:
             self.dealias = (dealias,)
+
         self.COV = AffineCOV(self.native_bounds, bounds)
         super().__init__(coord)
 
@@ -433,19 +434,24 @@ class IntervalBasis(Basis):
         data_axis = len(field.tensorsig) + axis
         grid_size = gdata.shape[data_axis]
         plan = self.transform_plan(grid_size)
-        plan.forward(gdata, cdata, data_axis)
+        if(field.adjoint):
+            plan.backward_adjoint(gdata, cdata, data_axis)
+        else:
+            plan.forward(gdata, cdata, data_axis)
 
     def backward_transform(self, field, axis, cdata, gdata):
         """Backward transform field data."""
         data_axis = len(field.tensorsig) + axis
         grid_size = gdata.shape[data_axis]
         plan = self.transform_plan(grid_size)
-        plan.backward(cdata, gdata, data_axis)
+        if(field.adjoint):
+            plan.forward_adjoint(cdata, gdata, data_axis)
+        else:
+            plan.backward(cdata, gdata, data_axis)
 
     def transform_plan(self, grid_size):
         # Subclasses must implement
         raise NotImplementedError
-
 
 class Jacobi(IntervalBasis, metaclass=CachedClass):
     """Jacobi polynomial basis."""
@@ -640,7 +646,6 @@ class Jacobi(IntervalBasis, metaclass=CachedClass):
         a = self.a + order
         b = self.b + order
         return self.clone_with(a=a, b=b)
-
 
 def Legendre(*args, **kw):
     return Jacobi(*args, a=0, b=0, **kw)
