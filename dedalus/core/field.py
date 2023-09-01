@@ -581,6 +581,11 @@ class Field(Current):
         copy[self.layout] = self.data
         return copy
 
+    def copy_adjoint(self):
+        copy = self.copy()
+        copy.adjoint = True
+        return copy
+
     def set_global_data(self, global_data):
         elements = self.layout.local_elements(self.domain, self.scales)
         self.set_local_data(global_data[np.ix_(*elements)])
