@@ -5,7 +5,7 @@ import scipy.linalg as sla
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from functools import partial
-
+import pypardiso
 
 matsolvers = {}
 def add_solver(solver):
@@ -107,6 +107,18 @@ class SuperluColamdSpsolve(_SuperluSpsolveBase):
     """SuperLU spsolve with 'COLAMD' column permutation."""
     permc_spec = "COLAMD"
 
+
+@add_solver
+class pypardiso_solver(SparseSolver):
+    """pypardiso factorized solve."""
+
+    def __init__(self, matrix, solver=None):
+        self.pypardisosolver = pypardiso.PyPardisoSolver(mtype=11)
+        self.pypardisosolver.set_iparm(11, 2) # Solve transposed system        
+        self.matrix = (matrix.copy().T).tocsr()
+
+    def solve(self, vector):
+        return pypardiso.spsolve(self.matrix,vector,solver=self.pypardisosolver,squeeze=False)
 
 @add_solver
 class UmfpackFactorized(SparseSolver):
