@@ -172,6 +172,13 @@ class MultistepIMEX:
         # Update solver
         solver.sim_time += dt
 
+    def reset(self):
+        """
+        Reset Multistep IMEX timestepper
+        """
+        self._iteration = 0
+
+
 
 @add_scheme
 class CNAB1(MultistepIMEX):
@@ -632,6 +639,11 @@ class RungeKuttaIMEX:
                 spX = sp.LHS_solvers[i].solve(spRHS)  # CREATES TEMPORARY
                 sp.scatter_inputs(spX, state_fields)
             solver.sim_time = sim_time_0 + k*c[i]
+
+    def reset(self):
+        """
+        Nothing to do for RK
+        """
 
 
 @add_scheme

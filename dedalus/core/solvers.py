@@ -654,6 +654,35 @@ class InitialValueSolver(SolverBase):
         self.iteration += 1
         self.dt = dt
 
+    def reset(self, reset_evaluators=False):
+        """Reset solver for reuse."""
+        # Reset problem time
+        self.problem.time['g'] = self.initial_sim_time
+        # Reset solver attributes
+        self.iteration = 0
+        self.sim_time  = self.initial_sim_time
+        self.init_time = self.world_time
+        # Reset evaluators
+        for handler in self.evaluator.handlers:
+            if(type(handler).__name__=="SystemHandler"):
+                # Reset RHS handler
+                handler.last_wall_div = -1
+                handler.last_sim_div = -1
+                handler.last_iter_div = -1
+            elif(type(handler).__name__=="DictionaryHandler"):
+                # Reset CFL and flow property handlers
+                handler.last_wall_div = -1
+                handler.last_sim_div = -1
+                handler.last_iter_div = -1
+            elif(reset_evaluators==True):
+                # Reset CFL and flow property handlers
+                handler.last_wall_div = -1
+                handler.last_sim_div = -1
+                handler.last_iter_div = -1
+
+        # Reset timestepper attributes
+        self.timestepper.reset()
+
     def evolve(self, timestep_function, log_cadence=100):
         """Advance system until stopping criterion is reached."""
         # Check for a stopping criterion

@@ -172,6 +172,7 @@ class CFL:
     def __init__(self, solver, initial_dt, cadence=1, safety=1., max_dt=np.inf,
                  min_dt=0., max_change=np.inf, min_change=0., threshold=0.):
         self.solver = solver
+        self.initial_dt = initial_dt
         self.stored_dt = initial_dt
         self.cadence = cadence
         self.safety = safety
@@ -231,3 +232,9 @@ class CFL:
             raise ValueError("Velocity must be a vector")
         cfl_operator = operators.AdvectiveCFL(velocity, coords[0])
         self.add_frequency(cfl_operator)
+
+    def reset(self):
+        """
+        Reset CFL for resetting an IVP
+        """
+        self.stored_dt = self.initial_dt
