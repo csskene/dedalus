@@ -17,16 +17,12 @@ from . import timesteppers
 from .evaluator import Evaluator
 from ..libraries.matsolvers import matsolvers
 from ..tools.config import config
-<<<<<<< HEAD
 from ..tools.array import scipy_sparse_eigs
 from ..tools.parallel import ProfileWrapper, parallel_mkdir
 
 PROFILE_DEFAULT = config['profiling'].getboolean('PROFILE_DEFAULT')
 PARALLEL_PROFILE_DEFAULT = config['profiling'].getboolean('PARALLEL_PROFILE_DEFAULT')
 PROFILE_DIRECTORY = pathlib.Path(config['profiling'].get('PROFILE_DIRECTORY'))
-=======
-from ..tools.array import scipy_sparse_eigs, scipy_sparse_eigs_adj
->>>>>>> f8d8bf8 (First attempt to accelerate adjoint eigenvectors by reusing LU transform of the direct solve)
 
 import logging
 logger = logging.getLogger(__name__.split('.')[-1])
