@@ -6,7 +6,6 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from functools import partial
 
-
 matsolvers = {}
 def add_solver(solver):
     matsolvers[solver.__name__.lower()] = solver
@@ -319,4 +318,27 @@ woodbury_matsolvers = {}
 for name, matsolver in matsolvers.items():
     woodbury_matsolvers['woodbury' + name] = partial(Woodbury, matsolver=matsolver)
 matsolvers.update(woodbury_matsolvers)
+
+@add_solver
+class mumps(SparseSolver):
+    """mumps linear solve via petsc4py"""
+
+    def __init__(self, matrix, solver=None):
+        from petsc4py import PETSc
+        self.mat = PETSc.Mat().createAIJ(size=matrix.shape, 
+                        csr=(matrix.indptr, matrix.indices, matrix.data))
+        self.mat_inv = PETSc.KSP().create()
+        self.mat_inv.setType('preonly')
+        self.mat_inv.setOperators(self.mat)
+        pc = self.mat_inv.getPC()
+        pc.setType('lu')
+        pc.setFactorSolverType('mumps')
+        self.mat_inv.setUp()
+        # Create PETSc vectors for matrix inverse
+        self.right_vec, self.left_vec = self.mat.createVecs()
+        
+    def solve(self, vector):
+        self.right_vec.setArray(vector)
+        self.mat_inv.solve(self.right_vec, self.left_vec)
+        return self.left_vec.getArray()
 
