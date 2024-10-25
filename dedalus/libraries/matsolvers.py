@@ -143,7 +143,6 @@ class _SuperluFactorizedBase(SparseSolver):
                             relax=self.relax,
                             panel_size=self.panel_size,
                             options=self.options)
-
     def solve(self, vector):
         return self.LU.solve(vector, trans=self.trans)
 
@@ -320,25 +319,76 @@ for name, matsolver in matsolvers.items():
 matsolvers.update(woodbury_matsolvers)
 
 @add_solver
-class mumps(SparseSolver):
-    """mumps linear solve via petsc4py"""
-
+class PETScSolver(SparseSolver):
+    """Base class for PETSc linear solvers via petsc4py"""
+    trans = "N"
+    factorSolverType = 'superlu'
     def __init__(self, matrix, solver=None):
+        # TODO: Set generic arguments for PETSc from command line
+        # import sys
+        # import petsc4py
         from petsc4py import PETSc
+        # petsc4py.init(sys.argv)
+        if self.trans == "T":
+            matrix = (matrix.T).tocsr()
         self.mat = PETSc.Mat().createAIJ(size=matrix.shape, 
-                        csr=(matrix.indptr, matrix.indices, matrix.data))
-        self.mat_inv = PETSc.KSP().create()
+                        csr=(matrix.indptr, matrix.indices, matrix.data), comm=PETSc.COMM_SELF)
+        self.mat_inv = PETSc.KSP().create(comm=PETSc.COMM_SELF)
         self.mat_inv.setType('preonly')
         self.mat_inv.setOperators(self.mat)
         pc = self.mat_inv.getPC()
         pc.setType('lu')
-        pc.setFactorSolverType('mumps')
+        pc.setFactorSolverType(self.factorSolverType)
+        self.mat_inv.setFromOptions()
         self.mat_inv.setUp()
         # Create PETSc vectors for matrix inverse
         self.right_vec, self.left_vec = self.mat.createVecs()
+        # pc_solver_type = pc.getFactorSolverType()
+        # print(pc_solver_type)
         
     def solve(self, vector):
-        self.right_vec.setArray(vector)
-        self.mat_inv.solve(self.right_vec, self.left_vec)
-        return self.left_vec.getArray()
+        out = np.empty_like(vector)
+        for k in range(vector.shape[1]):
+            self.right_vec.setArray(vector[:, k])
+            if self.trans == "N":
+                self.mat_inv.solve(self.right_vec, self.left_vec)
+            else:
+                self.mat_inv.solveTranspose(self.right_vec, self.left_vec)
+            np.copyto(out[:, k], self.left_vec.getArray())
+        return out
 
+@add_solver
+class PETScSolverSUPERLU(PETScSolver):
+    factorSolverType = 'superlu'
+
+@add_solver
+class PETScSolverMUMPS(PETScSolver):
+    factorSolverType = 'mumps'
+
+@add_solver
+class PETScSolverKLU(PETScSolver):
+    factorSolverType = 'klu'
+
+@add_solver
+class PETScSolverUMFPACK(PETScSolver):
+    factorSolverType = 'umfpack'
+
+@add_solver
+class PETScSolverSUPERLUTranpose(PETScSolver):
+    factorSolverType = 'superlu'
+    trans = 'T'
+
+@add_solver
+class PETScSolverMUMPSTranspose(PETScSolver):
+    factorSolverType = 'mumps'
+    trans = 'T'
+
+@add_solver
+class PETScSolverKLUTranspose(PETScSolver):
+    factorSolverType = 'klu'
+    trans = 'T'
+
+@add_solver
+class PETScSolverUMFPACKTranspose(PETScSolver):
+    factorSolverType = 'umfpack'
+    trans = 'T'
