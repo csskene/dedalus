@@ -321,74 +321,84 @@ matsolvers.update(woodbury_matsolvers)
 @add_solver
 class PETScSolver(SparseSolver):
     """Base class for PETSc linear solvers via petsc4py"""
-    trans = "N"
-    factorSolverType = 'superlu'
+    trans = 'N'
+    options_string = ''
+
     def __init__(self, matrix, solver=None):
-        # TODO: Set generic arguments for PETSc from command line
-        # import sys
-        # import petsc4py
+        import sys
+        import petsc4py
+        from mpi4py import MPI
+        # Initialise petsc4py with command line arguments
+        petsc4py.init(sys.argv, comm=MPI.COMM_SELF)
         from petsc4py import PETSc
-        # petsc4py.init(sys.argv)
+        # Add options from options_string
+        opts = PETSc.Options()
+        opts.insertString(self.options_string)
         if self.trans == "T":
             matrix = (matrix.T).tocsr()
+        # Create a PETSc matrix from matrix
         self.mat = PETSc.Mat().createAIJ(size=matrix.shape, 
                         csr=(matrix.indptr, matrix.indices, matrix.data), comm=PETSc.COMM_SELF)
+        # Create a PETSc linear system solver
         self.mat_inv = PETSc.KSP().create(comm=PETSc.COMM_SELF)
-        self.mat_inv.setType('preonly')
         self.mat_inv.setOperators(self.mat)
-        pc = self.mat_inv.getPC()
-        pc.setType('lu')
-        pc.setFactorSolverType(self.factorSolverType)
+        # Set KSP object from options
         self.mat_inv.setFromOptions()
-        self.mat_inv.setUp()
         # Create PETSc vectors for matrix inverse
         self.right_vec, self.left_vec = self.mat.createVecs()
-        # pc_solver_type = pc.getFactorSolverType()
-        # print(pc_solver_type)
         
     def solve(self, vector):
         out = np.empty_like(vector)
-        for k in range(vector.shape[1]):
-            self.right_vec.setArray(vector[:, k])
+        if vector.ndim == 2:
+            num_equs = vector.shape[1]
+        else:
+            num_equs = 1
+        for k in range(num_equs):
+            if num_equs == 1:
+                self.right_vec.setArray(vector)
+            else:
+                self.right_vec.setArray(vector[:, k])
             if self.trans == "N":
                 self.mat_inv.solve(self.right_vec, self.left_vec)
-            else:
+            elif self.trans == "T":
                 self.mat_inv.solveTranspose(self.right_vec, self.left_vec)
-            np.copyto(out[:, k], self.left_vec.getArray())
+            if vector.ndim == 1:
+                np.copyto(out, self.left_vec.getArray())
+            else:
+                np.copyto(out[:, k], self.left_vec.getArray())
         return out
 
 @add_solver
+class PETScSolverTranspose(PETScSolver):
+    trans = 'T'
+
+@add_solver
 class PETScSolverSUPERLU(PETScSolver):
-    factorSolverType = 'superlu'
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type superlu'
 
 @add_solver
 class PETScSolverMUMPS(PETScSolver):
-    factorSolverType = 'mumps'
-
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps'
 @add_solver
 class PETScSolverKLU(PETScSolver):
-    factorSolverType = 'klu'
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type klu'
 
 @add_solver
 class PETScSolverUMFPACK(PETScSolver):
-    factorSolverType = 'umfpack'
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type umfpack '
 
 @add_solver
-class PETScSolverSUPERLUTranpose(PETScSolver):
-    factorSolverType = 'superlu'
-    trans = 'T'
+class PETScSolverSUPERLUTranpose(PETScSolverTranspose):
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type superlu'
 
 @add_solver
-class PETScSolverMUMPSTranspose(PETScSolver):
-    factorSolverType = 'mumps'
-    trans = 'T'
+class PETScSolverMUMPSTranspose(PETScSolverTranspose):
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps'
 
 @add_solver
-class PETScSolverKLUTranspose(PETScSolver):
-    factorSolverType = 'klu'
-    trans = 'T'
+class PETScSolverKLUTranspose(PETScSolverTranspose):
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type klu'
 
 @add_solver
-class PETScSolverUMFPACKTranspose(PETScSolver):
-    factorSolverType = 'umfpack'
-    trans = 'T'
+class PETScSolverUMFPACKTranspose(PETScSolverTranspose):
+    options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type umfpack'
