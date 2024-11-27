@@ -334,16 +334,23 @@ class PETScSolver(SparseSolver):
         # Add options from options_string
         opts = PETSc.Options()
         opts.insertString(self.options_string)
+        # Ensure CSR
         if self.trans == "T":
             matrix = (matrix.T).tocsr()
+        else:
+            matrix = matrix.tocsr()
         # Create a PETSc matrix from matrix
-        self.mat = PETSc.Mat().createAIJ(size=matrix.shape, 
-                        csr=(matrix.indptr, matrix.indices, matrix.data), comm=PETSc.COMM_SELF)
+        self.mat = PETSc.Mat().createAIJ(size=matrix.shape, nnz = matrix.nnz,
+                        csr=(matrix.indptr, matrix.indices, matrix.data), 
+                        comm=PETSc.COMM_SELF)
+        self.mat.setFromOptions()
         # Create a PETSc linear system solver
         self.mat_inv = PETSc.KSP().create(comm=PETSc.COMM_SELF)
         self.mat_inv.setOperators(self.mat)
         # Set KSP object from options
         self.mat_inv.setFromOptions()
+        # Set up KSP
+        self.mat_inv.setUp()
         # Create PETSc vectors for matrix inverse
         self.right_vec, self.left_vec = self.mat.createVecs()
         
@@ -379,6 +386,7 @@ class PETScSolverSUPERLU(PETScSolver):
 @add_solver
 class PETScSolverMUMPS(PETScSolver):
     options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps'
+
 @add_solver
 class PETScSolverKLU(PETScSolver):
     options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type klu'
