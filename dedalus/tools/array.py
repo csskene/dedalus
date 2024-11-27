@@ -448,17 +448,18 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
     Same as scipy
     TODO: Add proper documentation here
     """
-    from petsc4py import PETSc
-    from slepc4py import SLEPc
+   
     if left:
         raise NotImplementedError
-    solver_class = str(matsolver.__base__.__name__)
-    if not(solver_class == 'PETScSolver' or solver_class=='PETScSolverTranspose'):
+    solver_class = str(matsolver.__name__)
+    if "PETSc" not in solver_class:
         raise AttributeError("SLEPc solver not available for non-PETSc matsolver")
     # Build sparse linear operator representing (A - σB)^I B = C^I B = D
     C = A - target * B
     # Create PETSc KSP object for C
     solver = matsolver(C)
+    from petsc4py import PETSc
+    from slepc4py import SLEPc
     # Convert B to PETSc matrix
     B = B.tocsr()
     B_mat = PETSc.Mat().createAIJ(size=B.shape, nnz = B.nnz,
