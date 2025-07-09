@@ -356,23 +356,20 @@ class PETScSolver(SparseSolver):
         
     def solve(self, vector):
         out = np.empty_like(vector)
-        if vector.ndim == 2:
-            num_equs = vector.shape[1]
-        else:
-            num_equs = 1
+        mult_RHS = vector.ndim == 2
+        num_equs = vector.shape[1] if mult_RHS else 1
         for k in range(num_equs):
-            if num_equs == 1:
-                self.right_vec.setArray(vector)
-            else:
-                self.right_vec.setArray(vector[:, k])
+            rhs_vec = vector[:, k] if mult_RHS else vector
+            self.right_vec.placeArray(rhs_vec)
             if self.trans == "N":
                 self.mat_inv.solve(self.right_vec, self.left_vec)
             elif self.trans == "T":
                 self.mat_inv.solveTranspose(self.right_vec, self.left_vec)
-            if vector.ndim == 1:
-                np.copyto(out, self.left_vec.getArray())
+            self.right_vec.resetArray()
+            if mult_RHS:
+                np.copyto(out[:, k], self.left_vec.getArray(readonly=True))
             else:
-                np.copyto(out[:, k], self.left_vec.getArray())
+                np.copyto(out, self.left_vec.getArray(readonly=True))
         return out
 
 @add_solver
