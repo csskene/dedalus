@@ -450,9 +450,11 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
     """ 
     if left:
         raise NotImplementedError
-    solver_class = str(matsolver.__name__)
-    if "PETSc" not in solver_class:
-        raise AttributeError("SLEPc solver not available for non-PETSc matsolver")
+    import petsc4py
+    import sys
+    from mpi4py import MPI
+    # Initialise petsc4py with command line arguments
+    petsc4py.init(sys.argv, comm=MPI.COMM_SELF)
     from petsc4py import PETSc
     from slepc4py import SLEPc
     # Convert A and B to PETSc matrices
