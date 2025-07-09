@@ -447,52 +447,44 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
     """
     Same as scipy
     TODO: Add proper documentation here
-    """
-   
+    """ 
     if left:
         raise NotImplementedError
     solver_class = str(matsolver.__name__)
     if "PETSc" not in solver_class:
         raise AttributeError("SLEPc solver not available for non-PETSc matsolver")
-    # Build sparse linear operator representing (A - σB)^I B = C^I B = D
-    C = A - target * B
-    # Create PETSc KSP object for C
-    solver = matsolver(C)
     from petsc4py import PETSc
     from slepc4py import SLEPc
-    # Convert B to PETSc matrix
+    # Convert A and B to PETSc matrices
+    A = A.tocsr()
+    A_mat = PETSc.Mat().createAIJ(size=A.shape, nnz = A.nnz,
+                        csr=(A.indptr, A.indices, A.data),
+                        comm=PETSc.COMM_SELF)
     B = B.tocsr()
     B_mat = PETSc.Mat().createAIJ(size=B.shape, nnz = B.nnz,
                         csr=(B.indptr, B.indices, B.data),
                         comm=PETSc.COMM_SELF)
-    class D_MF(object):
-        """
-        Class for matrix-free multiplication by D
-        """
-        def __init__(self, solver, B_mat):
-            self.ksp = solver.mat_inv
-            self.B_mat = B_mat
-            self.work_vector, _ = solver.mat.createVecs()
-        def mult(self, A, x, y):
-            """
-            Returns y = A x
-            """
-            self.B_mat.mult(x, self.work_vector)
-            self.ksp.solve(self.work_vector, y)
-    d_mf = D_MF(solver, B_mat)
-    D = PETSc.Mat().createPython(B.shape, d_mf, comm=PETSc.COMM_SELF)
+    # Set up eigenvalue problem
     eps = SLEPc.EPS(comm=PETSc.COMM_SELF)
     eps.create()
-    eps.setOperators(D)
-    eps.setWhichEigenpairs(eps.Which.LARGEST_MAGNITUDE)
-    eps.setProblemType(eps.ProblemType.NHEP)
+    eps.setOperators(A_mat, B=B_mat)
+    eps.setWhichEigenpairs(eps.Which.TARGET_MAGNITUDE)
+    eps.setProblemType(eps.ProblemType.GNHEP)
     eps.setDimensions(nev=N)
+    eps.setTarget(target)
+    st = eps.getST()
+    st.setType(st.Type.SINVERT)
+    ksp = st.getKSP()
+    ksp.setType('preonly')
+    pc = ksp.getPC()
+    pc.setType('lu')
+    pc.setFactorSolverType('mumps')
     # Set options from command line
     # this will override any other options!
     eps.setFromOptions()
     eps.solve()
     nconv = eps.getConverged()
-    vr, vi = D.getVecs()
+    vr, vi = A_mat.getVecs()
     # Unpack slepc output
     evals = []
     evecs = np.empty((B.shape[1], nconv), dtype=np.complex128)
@@ -505,7 +497,6 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
             evecs[:, i] = vr.getArray() + 1j*vi.getArray()
         evals.append(eig_val)
     evals = np.array(evals)
-    evals = 1 / evals + target
     eps.destroy()
     return evals, evecs
 
