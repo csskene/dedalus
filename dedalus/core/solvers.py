@@ -270,7 +270,7 @@ class EigenvalueSolver(SolverBase):
         if eig_solver=='scipy':
             eig_output = scipy_sparse_eigs(A=A, B=B, left=left, N=N, target=target, matsolver=self.matsolver, v0=v0, **kw)
         else:
-            eig_output = slepc_sparse_eigs(A=A, B=B, left=left, N=N, target=target)
+            eig_output = slepc_sparse_eigs(A=A, B=B, left=left, N=N, target=target, v0=v0)
         if left:
             # Note: this definition of "left eigenvectors" is consistent with the documentation for scipy.linalg.eig
             self.eigenvalues, pre_right_evecs, self.left_eigenvalues, pre_left_evecs = eig_output
