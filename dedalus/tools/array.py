@@ -445,14 +445,24 @@ def scipy_sparse_eigs(A, B, left, N, target, matsolver, **kw):
 
 def slepc_sparse_eigs(A, B, left, N, target, v0):
     """
-    Uses slepc to solve the generalised non-Hermitian
-    eigenvalue problem
-    Can also find the left eigenvectors using a two-sided routine
-    TODO: Add proper documentation here
+    Perform targeted eigenmode search using slepc
+    for eigenvalues near the target σ 
+    
+    Parameters
+    ----------
+    A, B : scipy sparse matrices
+        Sparse matrices for generalized eigenvalue problem
+    N : int
+        Number of eigenmodes to return
+    left: boolean
+        Whether to solve for the left eigenvectors or not
+    target : complex
+        Target σ for eigenvalue search
+    v0 : numpy array
+        Initial starting vector for the eigensolver
     """
-    import sys
     # Initialise petsc4py with command line arguments
-    import slepc4py
+    import sys, slepc4py
     slepc4py.init(sys.argv)
     from petsc4py import PETSc
     from slepc4py import SLEPc
@@ -484,8 +494,7 @@ def slepc_sparse_eigs(A, B, left, N, target, v0):
         eps.setTwoSided(True)
     # Initial guess
     if v0 is not None:
-        v0_petsc = A_mat.createVecRight()
-        v0_petsc.setArray(v0)
+        v0_petsc = PETSc.Vec(comm=PETSc.COMM_SELF).createWithArray(v0)
         eps.setInitialSpace(v0_petsc)
     # Set options from command line
     # this will override any other options!
