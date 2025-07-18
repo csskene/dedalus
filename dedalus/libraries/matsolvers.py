@@ -329,7 +329,7 @@ class PETScSolver(SparseSolver):
         import petsc4py
         from mpi4py import MPI
         # Initialise petsc4py with command line arguments
-        petsc4py.init(sys.argv, comm=MPI.COMM_SELF)
+        petsc4py.init(sys.argv)
         from petsc4py import PETSc
         # Add options from options_string
         opts = PETSc.Options()
