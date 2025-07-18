@@ -508,7 +508,12 @@ def slepc_sparse_eigs(A, B, left, N, target):
                 left_evecs[:, i] = vr.getArray() + 1j*vi.getArray()
         evals.append(eig_val)
     evals = np.array(evals)
+    # Destroy PETSc objects
     eps.destroy()
+    A_mat.destroy()
+    B_mat.destroy()
+    vr.destroy()
+    vi.destroy()
     if left:
         return evals, evecs, np.conj(evals), left_evecs
     else:
