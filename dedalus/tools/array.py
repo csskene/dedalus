@@ -443,13 +443,13 @@ def scipy_sparse_eigs(A, B, left, N, target, matsolver, **kw):
     else:
         return evals, evecs
 
-def slepc_sparse_eigs(A, B, left, N, target, matsolver):
+def slepc_sparse_eigs(A, B, left, N, target):
     """
-    Same as scipy
+    Uses slepc to solve the generalised non-Hermitian
+    eigenvalue problem
+    Can also find the left eigenvectors using a two-sided routine
     TODO: Add proper documentation here
-    """ 
-    if left:
-        raise NotImplementedError
+    """
     import sys
     # Initialise petsc4py with command line arguments
     import slepc4py
@@ -480,6 +480,8 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
     pc = ksp.getPC()
     pc.setType('lu')
     pc.setFactorSolverType('mumps')
+    if left:
+        eps.setTwoSided(True)
     # Set options from command line
     # this will override any other options!
     eps.setFromOptions()
@@ -489,6 +491,8 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
     # Unpack slepc output
     evals = []
     evecs = np.empty((B.shape[1], nconv), dtype=np.complex128)
+    if left:
+        left_evecs = np.empty((B.shape[1], nconv), dtype=np.complex128)
     for i in range(nconv):
         # TODO: Should we truncate to N if nconv>N?
         eig_val = eps.getEigenpair(i, vr, vi)
@@ -496,10 +500,19 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
             evecs[:, i] = vr.getArray()
         else:
             evecs[:, i] = vr.getArray() + 1j*vi.getArray()
+        if left:
+            eps.getLeftEigenvector(i, vr, vi)
+            if A.dtype==np.complex128:
+                left_evecs[:, i] = vr.getArray()
+            else:
+                left_evecs[:, i] = vr.getArray() + 1j*vi.getArray()
         evals.append(eig_val)
     evals = np.array(evals)
     eps.destroy()
-    return evals, evecs
+    if left:
+        return evals, evecs, np.conj(evals), left_evecs
+    else:
+        return evals, evecs
 
 def interleave_matrices(matrices):
     N = len(matrices)
