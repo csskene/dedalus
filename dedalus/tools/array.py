@@ -451,10 +451,9 @@ def slepc_sparse_eigs(A, B, left, N, target, matsolver):
     if left:
         raise NotImplementedError
     import sys
-    from mpi4py import MPI
     # Initialise petsc4py with command line arguments
     import slepc4py
-    slepc4py.init(sys.argv, comm=MPI.COMM_SELF)
+    slepc4py.init(sys.argv)
     from petsc4py import PETSc
     from slepc4py import SLEPc
     # Convert A and B to PETSc matrices
