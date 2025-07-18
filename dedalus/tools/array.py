@@ -443,7 +443,7 @@ def scipy_sparse_eigs(A, B, left, N, target, matsolver, **kw):
     else:
         return evals, evecs
 
-def slepc_sparse_eigs(A, B, left, N, target):
+def slepc_sparse_eigs(A, B, left, N, target, v0):
     """
     Uses slepc to solve the generalised non-Hermitian
     eigenvalue problem
@@ -482,6 +482,11 @@ def slepc_sparse_eigs(A, B, left, N, target):
     pc.setFactorSolverType('mumps')
     if left:
         eps.setTwoSided(True)
+    # Initial guess
+    if v0 is not None:
+        v0_petsc = A_mat.createVecRight()
+        v0_petsc.setArray(v0)
+        eps.setInitialSpace(v0_petsc)
     # Set options from command line
     # this will override any other options!
     eps.setFromOptions()
@@ -514,6 +519,8 @@ def slepc_sparse_eigs(A, B, left, N, target):
     B_mat.destroy()
     vr.destroy()
     vi.destroy()
+    if v0 is not None:
+        v0_petsc.destroy()
     if left:
         return evals, evecs, np.conj(evals), left_evecs
     else:
