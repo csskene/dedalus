@@ -468,13 +468,18 @@ def slepc_sparse_eigs(A, B, left, N, target, v0):
     from slepc4py import SLEPc
     # Convert A and B to PETSc matrices
     A = A.tocsr()
-    A_mat = PETSc.Mat().createAIJ(size=A.shape, nnz = A.nnz,
-                        csr=(A.indptr, A.indices, A.data),
-                        comm=PETSc.COMM_SELF)
-    B = B.tocsr()
-    B_mat = PETSc.Mat().createAIJ(size=B.shape, nnz = B.nnz,
-                        csr=(B.indptr, B.indices, B.data),
-                        comm=PETSc.COMM_SELF)
+    A_mat = PETSc.Mat().create(comm=PETSc.COMM_SELF)
+    A_mat.setFromOptions()
+    A_mat.setSizes(A.shape)
+    A_mat.setPreallocationCSR((A.indptr, A.indices, A.data))
+    #A_mat.setPreallocationNNZ(A.nnz)
+    A_mat.assemble()
+    B_mat = PETSc.Mat().create(comm=PETSc.COMM_SELF)
+    B_mat.setSizes(B.shape)
+    B_mat.setFromOptions()
+    B_mat.setPreallocationCSR((B.indptr, B.indices, B.data))
+    #B_mat.setPreallocationNNZ(B.nnz)
+    B_mat.assemble()
     # Set up eigenvalue problem
     eps = SLEPc.EPS(comm=PETSc.COMM_SELF)
     eps.create()
@@ -494,7 +499,8 @@ def slepc_sparse_eigs(A, B, left, N, target, v0):
         eps.setTwoSided(True)
     # Initial guess
     if v0 is not None:
-        v0_petsc = PETSc.Vec(comm=PETSc.COMM_SELF).createWithArray(v0)
+        v0_petsc = A_mat.createVecRight()
+        v0_petsc.setValues(range(0, v0.shape[-1]), v0)
         eps.setInitialSpace(v0_petsc)
     # Set options from command line
     # this will override any other options!
