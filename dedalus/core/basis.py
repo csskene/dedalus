@@ -428,7 +428,7 @@ class ConvertConstantCardinal(operators.ConvertConstant, operators.SpectralOpera
 
     @staticmethod
     def _full_matrix(input_basis, output_basis):
-        return np.ones(input_basis.size)[None, :]
+        return np.ones((output_basis.size, 1))
 
 
 class InterpolateCardinal(operators.Interpolate, operators.SpectralOperator1D):
@@ -439,10 +439,10 @@ class InterpolateCardinal(operators.Interpolate, operators.SpectralOperator1D):
     subaxis_dependence = [True]
     subaxis_coupling = [True]
 
-    def __init__(self, coord, size, position, out=None):
+    def __init__(self, operand, coord, position, out=None):
         if not isinstance(position, (int, np.integer)):
             raise TypeError("Cardinal interpolation position must be an integer")
-        super().__init__(coord, size, position, out=out)
+        super().__init__(operand, coord, position, out=out)
 
     @staticmethod
     def _output_basis(input_basis, position):
