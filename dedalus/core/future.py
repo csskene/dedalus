@@ -128,6 +128,20 @@ class Future(Operand):
             args = [arg.replace(old, new) if isinstance(arg, Operand) else arg for arg in self.args]
             return self.new_operands(*args)
 
+    def replace_dict(self, subs):
+        """Replace specified operands/operators according to a dictionary."""
+        # Check for entire expression match
+        if self in subs:
+            return subs[self]
+        # Check base and call with replaced arguments
+        elif type(self) in subs:
+            args = [arg.replace_dict(subs) if isinstance(arg, Operand) else arg for arg in self.args]
+            return subs[type(self)](*args)
+        # Call with replaced arguments
+        else:
+            args = [arg.replace_dict(subs) if isinstance(arg, Operand) else arg for arg in self.args]
+            return self.new_operands(*args)
+
     # def simplify(self, *vars):
     #     """Simplify expression, except subtrees containing specified variables."""
     #     # Simplify arguments if variables are present

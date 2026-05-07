@@ -212,6 +212,10 @@ class Operand:
         """Replace specified operand/operator."""
         raise NotImplementedError()
 
+    def replace_dict(self, subs):
+        """Replace specified operands/operators according to a dictionary."""
+        raise NotImplementedError()
+
     def sym_diff(self, var):
         """Symbolically differentiate with respect to specified operand."""
         raise NotImplementedError()
@@ -284,9 +288,8 @@ class Operand:
         # Compute differential
         epsilon = Field(dist=dist, dtype=dtype)
         # d/dε F(X0 + ε*X1)
-        diff = self
-        for var, pert in zip(variables, perturbations):
-            diff = diff.replace(var, var + epsilon*pert)
+        subs = {var: var + epsilon*pert for var, pert in zip(variables, perturbations)}
+        diff = self.replace_dict(subs)
         diff = diff.sym_diff(epsilon)
         # ε -> 0
         if diff:
@@ -295,8 +298,8 @@ class Operand:
         # Replace variables with backgrounds, if specified
         if diff:
             if backgrounds:
-                for var, bg in zip(variables, backgrounds):
-                    diff = diff.replace(var, bg)
+                subs = {var: bg for var, bg in zip(variables, backgrounds)}
+                diff = diff.replace_dict(subs)
         return diff
 
     @property
@@ -375,6 +378,13 @@ class Current(Operand):
         """Replace specified operand/operator."""
         if self == old:
             return new
+        else:
+            return self
+
+    def replace_dict(self, subs):
+        """Replace specified operands/operators according to a dictionary."""
+        if self in subs:
+            return subs[self]
         else:
             return self
 

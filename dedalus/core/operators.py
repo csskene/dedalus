@@ -701,6 +701,20 @@ class LinearOperator(FutureField):
             new_operand = self.operand.replace(old, new)
             return self.new_operand(new_operand)
 
+    def replace_dict(self, subs):
+        """Replace specified operands/operators according to a dictionary."""
+        # Check for entire expression match
+        if self in subs:
+            return subs[self]
+        # Check base and call with replaced arguments
+        elif type(self) in subs:
+            new_operand = self.operand.replace_dict(subs)
+            return subs[type(self)](new_operand)
+        # Call with replaced arguments
+        else:
+            new_operand = self.operand.replace_dict(subs)
+            return self.new_operand(new_operand)
+
     def expand(self, *vars):
         """Expand expression over specified variables."""
         from .arithmetic import Add, Multiply
@@ -1610,6 +1624,11 @@ class Convert(SpectralOperator, metaclass=MultiClass):
         """Replace specified operand/operator."""
         # Replace operand, skipping conversion
         return self.operand.replace(old, new)
+
+    def replace_dict(self, subs):
+        """Replace specified operands/operators according to a dictionary."""
+        # Replace operand, skipping conversion
+        return self.operand.replace_dict(subs)
 
     # def expand(self, *vars):
     #     """Expand expression over specified variables."""
