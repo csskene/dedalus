@@ -393,7 +393,7 @@ class PETScSolverUMFPACK(PETScSolver):
     options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type umfpack '
 
 @add_solver
-class PETScSolverSUPERLUTranpose(PETScSolverTranspose):
+class PETScSolverSUPERLUTranspose(PETScSolverTranspose):
     options_string = '-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type superlu'
 
 @add_solver
