@@ -133,6 +133,26 @@ def merge_virtual_analysis(base_path, cleanup=False):
     for virtual_file_path in virtual_file_paths:
         merge_virtual_file(virtual_file_path, cleanup=cleanup)
 
+def merge_task(file, task_name, overwrite=False):
+        """Merge virtual dataset into regular dataset."""
+        # Create new dataset
+        old_dset = file['tasks'][task_name]
+        if not old_dset.is_virtual:
+            raise ValueError("Specified dataset is not a virtual dataset.")
+        new_name = f"{task_name}_merged"
+        new_shape = (1,) + old_dset.shape[1:] # shape[0] = 1 to automatically chunk within writes
+        new_dset = file['tasks'].create_dataset(name=new_name, shape=new_shape, maxshape=old_dset.maxshape, dtype=old_dset.dtype)
+        new_dset.resize(old_dset.shape[0], axis=0)
+        # Copy attributes and scales
+        new_dset.attrs.update(old_dset.attrs)
+        # Copy data chunk by chunk
+        for chunk in new_dset.iter_chunks():
+            new_dset[chunk] = old_dset[chunk]
+        # Overwrite old dataset if requested
+        if overwrite:
+            del file['tasks'][task_name]
+            file['tasks'].move(new_name, task_name)
+
 def merge_virtual_file(virtual_file_path, cleanup=False):
     """
     Merge a virtual file from a FileHandler.
@@ -146,15 +166,10 @@ def merge_virtual_file(virtual_file_path, cleanup=False):
     """
     merged_file_path = pathlib.Path(virtual_file_path)
     logger.info("Merging virtual file {}".format(merged_file_path))
-    tmp_file_path = merged_file_path.parent.joinpath('tmp_{}.h5'.format(merged_file_path.stem))
-    shutil.move(merged_file_path, tmp_file_path)
-
-    # Create joint file, overwriting if it already exists
-    with h5py.File(str(merged_file_path), mode='w') as merged_file:
-        # Setup joint file based on first process file (arbitrary)
-        merge_virtual(merged_file, tmp_file_path)
-    os.remove(tmp_file_path)
-
+    with h5py.File(merged_file_path, 'r+') as file:
+        for taskname in list(file['tasks']):
+            logger.info(f"Merging task: {taskname}")
+            merge_task(file, taskname, overwrite=True)
     # Cleanup after completed merge, if directed
     if cleanup:
         folder = merged_file_path.parent.joinpath("{}/".format(virtual_file_path.stem))
