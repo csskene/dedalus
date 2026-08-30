@@ -40,6 +40,7 @@ __all__ = ['CardinalBasis',
            'DiskBasis',
            'AnnulusBasis',
            'SphereBasis',
+           'WedgeBasis',
            'BallBasis',
            'ShellBasis']
 
@@ -3574,6 +3575,34 @@ class SphereLaplacian(operators.Laplacian, operators.SeparableSphereOperator):
         k_lap[np.abs(spintotal_out) > ell] = 0
         return k_lap / radius**2
 
+
+class WedgeBasis(SphereBasis):
+    '''
+    For spherical wedge computations with enforced mres azimuthal symmetry
+    '''
+
+    @classmethod
+    def _preprocess_cache_args(cls, coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library, mres):
+        """Preprocess arguments into canonical form for caching. Must accept and return __init__ arguments."""
+        # Get SphereArgs from SphereBasis, and add additional mres argument
+        SphereArgs = SphereBasis._preprocess_cache_args(coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library)
+        return (*SphereArgs, mres)
+    
+    def __init__(self, coordsys, shape, dtype, radius=1, dealias=(1,1), azimuth_library=None, colatitude_library=None, mres=1):
+        self.mres = mres
+        super().__init__(coordsys, shape, dtype, radius=radius, dealias=dealias, azimuth_library=azimuth_library, colatitude_library=colatitude_library)
+        # Add mres to grid params for __eq__ check
+        self.grid_params = (*self.grid_params, self.mres)
+
+    def __eq__(self, other):
+        if isinstance(other, WedgeBasis):
+            if self.grid_params == other.grid_params:
+                if self.shape == other.shape:
+                    return True
+        return False
+
+    def __hash__(self):
+        return id(self)
 
 # These are common for BallRadialBasis and ShellRadialBasis
 class RegularityBasis(SpinRecombinationBasis, MultidimensionalBasis):
