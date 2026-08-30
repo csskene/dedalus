@@ -4302,7 +4302,7 @@ class Spherical3DBasis(MultidimensionalBasis):
     dims = ['azimuth', 'colatitude', 'radius']
     subaxis_dependence = [False, True, True]
 
-    def __init__(self, coordsys, shape_angular, dealias_angular, radial_basis, dtype, azimuth_library=None, colatitude_library=None):
+    def __init__(self, coordsys, shape_angular, dealias_angular, radial_basis, dtype, azimuth_library=None, colatitude_library=None, mres=1):
         self.coordsys = coordsys
         self.shape = tuple( (*shape_angular, radial_basis.shape[2] ) )
         self.dtype = dtype
@@ -4316,6 +4316,7 @@ class Spherical3DBasis(MultidimensionalBasis):
         self.k = radial_basis.k
         self.azimuth_library = azimuth_library
         self.colatitude_library = colatitude_library
+        self.mres = mres
         self.sphere_basis = self.S2_basis()
         self.azimuth_basis = self.sphere_basis.azimuth_basis
         self.mmax = self.sphere_basis.mmax
@@ -4410,7 +4411,7 @@ class Spherical3DBasis(MultidimensionalBasis):
             else:
                 radius = max(self.radii)
         return SphereBasis(self.coordsys, self.shape[:2], self.dtype, radius=radius, dealias=self.dealias[:2],
-                    azimuth_library=self.azimuth_library, colatitude_library=self.colatitude_library)
+                    azimuth_library=self.azimuth_library, colatitude_library=self.colatitude_library, mres=self.mres)
 
     @CachedMethod
     def operator_matrix(self, op, l, regtotal, dk=0, size=None):
@@ -4497,7 +4498,7 @@ class Spherical3DBasis(MultidimensionalBasis):
 class ShellBasis(Spherical3DBasis, metaclass=CachedClass):
 
     @classmethod
-    def _preprocess_cache_args(cls, coordsys, shape, dtype, radii, k, alpha, dealias, azimuth_library, colatitude_library, radius_library):
+    def _preprocess_cache_args(cls, coordsys, shape, dtype, radii, k, alpha, dealias, azimuth_library, colatitude_library, radius_library, mres):
         """Preprocess arguments into canonical form for caching. Must accept and return __init__ arguments."""
         # coordsys: SphericalCoordinates
         if not isinstance(coordsys, SphericalCoordinates):
@@ -4542,9 +4543,9 @@ class ShellBasis(Spherical3DBasis, metaclass=CachedClass):
                 radius_library = Jacobi.default_dct
             else:
                 radius_library = Jacobi.default_library
-        return (coordsys, shape, dtype, radii, k, alpha, dealias, azimuth_library, colatitude_library, radius_library)
+        return (coordsys, shape, dtype, radii, k, alpha, dealias, azimuth_library, colatitude_library, radius_library, mres)
 
-    def __init__(self, coordsys, shape, dtype, radii=(1,2), k=0, alpha=(-0.5,-0.5), dealias=(1,1,1), azimuth_library=None, colatitude_library=None, radius_library=None):
+    def __init__(self, coordsys, shape, dtype, radii=(1,2), k=0, alpha=(-0.5,-0.5), dealias=(1,1,1), azimuth_library=None, colatitude_library=None, radius_library=None, mres=1):
         # Save arguments without modification for caching
         self.coordsys = coordsys
         self.shape = shape
@@ -4556,12 +4557,13 @@ class ShellBasis(Spherical3DBasis, metaclass=CachedClass):
         self.azimuth_library = azimuth_library
         self.colatitude_library = colatitude_library
         self.radius_library = radius_library
+        self.mres = mres
         # Other attributes
         self.volume = 4 / 3 * np.pi * (radii[1]**3 - radii[0]**3)
         self.radius_library = radius_library
         self.radial_basis = ShellRadialBasis(coordsys, shape[2], radii=radii, alpha=alpha, dealias=(dealias[2],), k=k, dtype=dtype, radius_library=radius_library)
-        Spherical3DBasis.__init__(self, coordsys, shape[:2], dealias[:2], self.radial_basis, dtype=dtype, azimuth_library=azimuth_library, colatitude_library=colatitude_library)
-        self.grid_params = (coordsys, dtype, radii, alpha, dealias, azimuth_library, colatitude_library, radius_library)
+        Spherical3DBasis.__init__(self, coordsys, shape[:2], dealias[:2], self.radial_basis, dtype=dtype, azimuth_library=azimuth_library, colatitude_library=colatitude_library, mres=mres)
+        self.grid_params = (coordsys, dtype, radii, alpha, dealias, azimuth_library, colatitude_library, radius_library, mres)
 #        self.forward_transform_radius = self.radial_basis.forward_transform
 #        self.backward_transform_radius = self.radial_basis.backward_transform
         self.forward_transforms = [self.forward_transform_azimuth,
