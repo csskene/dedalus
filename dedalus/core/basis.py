@@ -3604,6 +3604,14 @@ class WedgeBasis(SphereBasis):
     def __hash__(self):
         return id(self)
 
+    def elements_to_groups(self, grid_space, elements):
+        groups = super().elements_to_groups(grid_space, elements)
+        # Relabel coefficient space m's
+        if not grid_space[0]:
+            groups[0] *= self.mres
+        return groups
+
+
 # These are common for BallRadialBasis and ShellRadialBasis
 class RegularityBasis(SpinRecombinationBasis, MultidimensionalBasis):
 
