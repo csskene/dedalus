@@ -40,7 +40,6 @@ __all__ = ['CardinalBasis',
            'DiskBasis',
            'AnnulusBasis',
            'SphereBasis',
-           'WedgeBasis',
            'BallBasis',
            'ShellBasis']
 
@@ -1824,10 +1823,11 @@ class SpinRecombinationBasis:
 # These are common for S2 and D2
 class SpinBasis(MultidimensionalBasis, SpinRecombinationBasis):
 
-    def __init__(self, coordsys, shape, dtype, dealias, azimuth_library=None):
+    def __init__(self, coordsys, shape, dtype, dealias, azimuth_library=None, mres=1):
         self.coordsys = coordsys
         self.shape = shape
         self.dtype = dtype
+        self.mres = mres
         if np.isscalar(dealias):
             self.dealias = (dealias, dealias)
         elif len(dealias) != 2:
@@ -1836,10 +1836,11 @@ class SpinBasis(MultidimensionalBasis, SpinRecombinationBasis):
             self.dealias = dealias
         self.azimuth_library = azimuth_library
         self.mmax = (shape[0] - 1) // 2
+        L = 2 * np.pi / mres
         if dtype == np.complex128:
-            self.azimuth_basis = ComplexFourier(coordsys.coords[0], shape[0], bounds=(0, 2*np.pi), library=azimuth_library, dealias=self.dealias[0])
+            self.azimuth_basis = ComplexFourier(coordsys.coords[0], shape[0], bounds=(0, L), library=azimuth_library, dealias=self.dealias[0])
         elif dtype == np.float64:
-            self.azimuth_basis = RealFourier(coordsys.coords[0], shape[0], bounds=(0, 2*np.pi), library=azimuth_library, dealias=self.dealias[0])
+            self.azimuth_basis = RealFourier(coordsys.coords[0], shape[0], bounds=(0, L), library=azimuth_library, dealias=self.dealias[0])
         else:
             raise NotImplementedError()
         self.global_grid_azimuth = self.azimuth_basis.global_grid
@@ -2837,7 +2838,7 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
     default_library = "matrix"
 
     @classmethod
-    def _preprocess_cache_args(cls, coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library):
+    def _preprocess_cache_args(cls, coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library, mres):
         """Preprocess arguments into canonical form for caching. Must accept and return __init__ arguments."""
         # coordsys: S2Coordinates or SphericalCoordinates
         if not isinstance(coordsys, (S2Coordinates, SphericalCoordinates)):
@@ -2863,10 +2864,10 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
         # colatitude_library: pick default
         if colatitude_library is None:
             colatitude_library = cls.default_library
-        return (coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library)
+        return (coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library, mres)
 
-    def __init__(self, coordsys, shape, dtype, radius=1, dealias=(1,1), azimuth_library=None, colatitude_library=None):
-        super().__init__(coordsys, shape, dtype, dealias, azimuth_library=azimuth_library)
+    def __init__(self, coordsys, shape, dtype, radius=1, dealias=(1,1), azimuth_library=None, colatitude_library=None, mres=1):
+        super().__init__(coordsys, shape, dtype, dealias, azimuth_library=azimuth_library, mres=mres)
         # Save arguments without modification for caching
         self.coordsys = coordsys
         self.shape = shape
@@ -2897,7 +2898,7 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
         self.backward_transforms = [self.backward_transform_azimuth,
                                     self.backward_transform_colatitude,
                                     self.backward_transform_radius]
-        self.grid_params = (coordsys, dtype, radius, dealias, azimuth_library, colatitude_library)
+        self.grid_params = (coordsys, dtype, radius, dealias, azimuth_library, colatitude_library, mres)
         if self.shape[0] > 1 and shape[0] % 2 != 0:
             raise ValueError("Don't use an odd phi resolution please")
         if self.shape[0] > 1 and self.dtype == np.float64 and shape[0] % 4 != 0:
@@ -2960,11 +2961,12 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
             # Repacked triangular truncation
             Nphi = self.shape[0]
             Lmax = self.Lmax
+            mres = self.mres
             if self.mmax > 0:
                 if self.dtype == np.complex128:
-                    return (Nphi//2, Lmax+1+max(0, Lmax+1-Nphi//2))
+                    return (Nphi//2, Lmax+1+max(0, Lmax+1-mres*(Nphi//2)))
                 elif self.dtype == np.float64:
-                    return (Nphi//2, Lmax+1+max(0, Lmax+2-Nphi//2))
+                    return (Nphi//2, Lmax+1+max(0, Lmax+1-mres*(Nphi//2-1)))
             else:
                 if self.dtype == np.complex128:
                     return (1, Lmax+1)
@@ -2995,6 +2997,7 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
                 return (2, 1)
 
     def elements_to_groups(self, grid_space, elements):
+        mres = self.mres
         if grid_space[0]:
             # grid-grid space
             groups = elements
@@ -3003,7 +3006,7 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
             # Unpacked m
             permuted_native_wavenumbers = self.azimuth_basis.native_wavenumbers
             groups = elements.copy()
-            groups[0] = permuted_native_wavenumbers[elements[0]]
+            groups[0] = permuted_native_wavenumbers[elements[0]] * mres
         else:
             # coeff-coeff space
             # Repacked triangular truncation
@@ -3012,12 +3015,12 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
             Lmax = self.Lmax
             if self.dtype == np.complex128:
                 # Valid for m > 0 except Nyquist
-                shift = max(0, Lmax + 1 - Nphi//2)
-                m = 1 * i
+                shift = max(0, Lmax + 1 - mres*(Nphi//2))
+                m = mres * i
                 ell = j - shift
                 # Fix for m < 0
                 neg_modes = (ell < m)
-                m[neg_modes] = i[neg_modes] - (Nphi+1)//2
+                m[neg_modes] = mres*(i[neg_modes] - (Nphi+1)//2)
                 ell[neg_modes] = Lmax - j[neg_modes]
                 # Fix for m = 0
                 m_zero = (i == 0)
@@ -3025,16 +3028,16 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
                 ell[m_zero] = j[m_zero]
                 # Fix for Nyquist
                 nyq_modes = (i == 0) * (j > Lmax)
-                m[nyq_modes] = Nphi//2
+                m[nyq_modes] = mres*(Nphi//2)
                 ell[nyq_modes] = j[nyq_modes] - shift
             elif self.dtype == np.float64:
                 # Valid for 0 < m < Nphi//4
-                shift = max(0, Lmax + 2 - Nphi//2)
-                m = i // 2
+                shift = max(0, Lmax + 1 - mres*(Nphi//2-1))
+                m = mres*(i // 2)
                 ell = j - shift
                 # Fix for Nphi//4 <= m < Nphi//2-1
                 neg_modes = (ell < m)
-                m[neg_modes] = (Nphi//2 - 1) - m[neg_modes]
+                m[neg_modes] = mres*((Nphi//2 - 1) - i[neg_modes]//2)
                 ell[neg_modes] = Lmax - j[neg_modes]
                 # Fix for m = 0
                 m_zero = (i < 2)
@@ -3042,7 +3045,7 @@ class SphereBasis(SpinBasis, metaclass=CachedClass):
                 ell[m_zero] = j[m_zero]
                 # Fix for m = Nphi//2 - 1
                 m_max = (i < 2) * (j > Lmax)
-                m[m_max] = Nphi//2 - 1
+                m[m_max] = mres*(Nphi//2 - 1)
                 ell[m_max] = j[m_max] - shift
             groups = np.array([m, ell])
         return groups
@@ -3574,42 +3577,6 @@ class SphereLaplacian(operators.Laplacian, operators.SeparableSphereOperator):
         k_lap[np.abs(spintotal_in) > ell] = 0
         k_lap[np.abs(spintotal_out) > ell] = 0
         return k_lap / radius**2
-
-
-class WedgeBasis(SphereBasis):
-    '''
-    For spherical wedge computations with enforced mres azimuthal symmetry
-    '''
-
-    @classmethod
-    def _preprocess_cache_args(cls, coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library, mres):
-        """Preprocess arguments into canonical form for caching. Must accept and return __init__ arguments."""
-        # Get SphereArgs from SphereBasis, and add additional mres argument
-        SphereArgs = SphereBasis._preprocess_cache_args(coordsys, shape, dtype, radius, dealias, azimuth_library, colatitude_library)
-        return (*SphereArgs, mres)
-    
-    def __init__(self, coordsys, shape, dtype, radius=1, dealias=(1,1), azimuth_library=None, colatitude_library=None, mres=1):
-        self.mres = mres
-        super().__init__(coordsys, shape, dtype, radius=radius, dealias=dealias, azimuth_library=azimuth_library, colatitude_library=colatitude_library)
-        # Add mres to grid params for __eq__ check
-        self.grid_params = (*self.grid_params, self.mres)
-
-    def __eq__(self, other):
-        if isinstance(other, WedgeBasis):
-            if self.grid_params == other.grid_params:
-                if self.shape == other.shape:
-                    return True
-        return False
-
-    def __hash__(self):
-        return id(self)
-
-    def elements_to_groups(self, grid_space, elements):
-        groups = super().elements_to_groups(grid_space, elements)
-        # Relabel coefficient space m's
-        if not grid_space[0]:
-            groups[0] *= self.mres
-        return groups
 
 
 # These are common for BallRadialBasis and ShellRadialBasis
